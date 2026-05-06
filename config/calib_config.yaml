@@ -1,0 +1,9 @@
+%YAML:1.0
+---
+image_dir: "data/camera"
+image_extensions:
+  - ".jpg"
+  - ".jpeg"
+  - ".png"
+  - ".bmp"
+read_grayscale: 1
