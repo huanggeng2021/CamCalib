@@ -2,7 +2,7 @@
 #include <iostream>
 #include <vector>
 #include "utils/Config.h"
-#include "imageProcess/ImageLoader.h"
+#include "imageProcess/ImageProcess.h"
 #include "imageProcess/CannyDetecter.h"
 
 int main() {
@@ -25,3 +25,4 @@ int main() {
 
     return 0;
 }
+
