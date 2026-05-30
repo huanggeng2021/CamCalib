@@ -4,8 +4,186 @@
 #include <filesystem>
 #include <iostream>
 #include <cmath>
+#include <limits>
 
 namespace camcalib {    
+
+    std::vector<ImageProcess::Circle> ImageProcess::getBigMarkers(const std::vector<ImageProcess::Circle>& circles){
+
+        std::vector<ImageProcess::Circle> sortedCircles = circles;
+
+        std::sort(sortedCircles.begin(), sortedCircles.end(), []
+        (const ImageProcess::Circle& a, const ImageProcess::Circle& b){
+             return a.radius > b.radius;
+            }
+        );
+
+        std::vector<ImageProcess::Circle> bigMarkers;
+        for (int k = 0; k < 5 && k < sortedCircles.size(); k++)
+        {
+            bigMarkers.push_back(sortedCircles[k]);
+        }
+
+        return bigMarkers;
+    }
+
+    ImageProcess::MarkerDistanceInfo ImageProcess::findNearestAndFarthestMarkers(const std::vector<ImageProcess::Circle>& bigMarkers){
+
+        MarkerDistanceInfo distanceInfo;
+        double minDistance = std::numeric_limits<double>::max(); 
+        double maxDistance = std::numeric_limits<double>::lowest();
+
+        for(int mi = 0; mi < 5; mi++ ){
+            for(int mj = mi + 1; mj < 5; mj++){
+
+                double x = static_cast<double>(bigMarkers[mi].center.x - bigMarkers[mj].center.x);
+                double y = static_cast<double>(bigMarkers[mi].center.y - bigMarkers[mj].center.y);
+                double dis = sqrt(x * x + y * y);
+                
+                if(dis < minDistance){
+
+                    minDistance = dis;
+                    distanceInfo.nearest.first = mi;
+                    distanceInfo.nearest.second = mj;
+
+                }
+                
+                if(dis > maxDistance){
+
+                    maxDistance = dis;
+                    distanceInfo.farthest.first = mi;
+                    distanceInfo.farthest.second = mj;
+
+                }
+ 
+            }
+
+        }
+
+        return distanceInfo;
+    }
+
+    int ImageProcess::findRemainingMarkerIndex(const MarkerDistanceInfo& distanceInfo){
+
+        for(int pi = 0; pi < 5; pi++){
+            if( pi != distanceInfo.nearest.first &&
+                pi != distanceInfo.nearest.second &&
+                pi != distanceInfo.farthest.first &&
+                pi != distanceInfo.farthest.second){
+
+                return pi;
+
+             }
+        }
+
+        return -1;
+    }
+
+    bool ImageProcess::isMarkerPairParallel(
+        const std::vector<ImageProcess::Circle>& bigMarkers,
+        const MarkerDistanceInfo& distanceInfo
+    ){
+
+        cv::Point2d nearP1 = bigMarkers[distanceInfo.nearest.first].center;
+        cv::Point2d nearP2 = bigMarkers[distanceInfo.nearest.second].center;
+        cv::Point2d farP1 = bigMarkers[distanceInfo.farthest.first].center;
+        cv::Point2d farP2 = bigMarkers[distanceInfo.farthest.second].center;
+
+        cv::Point2d v1 = nearP2 - nearP1;
+        cv::Point2d v2 = farP2 - farP1;
+
+        Eigen::Vector2d v11(v1.x, v1.y);
+        Eigen::Vector2d v22(v2.x, v2.y);
+
+        double dot = v11.dot(v22);
+        double cross = v11.x() * v22.y() - v11.y() * v22.x();
+
+        double angle = std::atan2(cross, dot) * 180.0 / M_PI;
+        double parallelAngle = std::abs(angle);
+        parallelAngle = 180.0 - parallelAngle;
+        
+        if(parallelAngle > 90){
+            parallelAngle = 180.0 - parallelAngle;
+        }
+
+        std::cout << "angle = " << parallelAngle << std::endl;
+
+        return parallelAngle <= 10.0;
+    }
+
+    std::vector<ImageProcess::Circle> ImageProcess::orderBigMarkers(
+        const std::vector<ImageProcess::Circle>& bigMarkers,
+        const MarkerDistanceInfo& distanceInfo,
+        int p3Index
+    ){
+
+        int near1 = distanceInfo.nearest.first;
+        int near2 = distanceInfo.nearest.second;
+
+        int far1 = distanceInfo.farthest.first;
+        int far2 = distanceInfo.farthest.second;
+
+        cv::Point2d nearP1 = bigMarkers[near1].center;
+        cv::Point2d nearP2 = bigMarkers[near2].center;
+
+        cv::Point2d farP1 = bigMarkers[far1].center;
+        cv::Point2d farP2 = bigMarkers[far2].center;
+
+        cv::Point2d p3 = bigMarkers[p3Index].center;
+
+        cv::Point2d farVector = farP2 - farP1;
+        Eigen::Vector2d v22(farVector.x, farVector.y);
+
+        Eigen::Vector2d vNear1P3(p3.x - nearP1.x, p3.y - nearP1.y);
+        Eigen::Vector2d vNear2P3(p3.x - nearP2.x, p3.y - nearP2.y);
+
+        double angle1 = std::atan2(vNear1P3.x() * v22.y() - vNear1P3.y() * v22.x(), 
+                                vNear1P3.dot(v22)) * 180.0 / CV_PI;
+
+        double angle2 = std::atan2(vNear2P3.x() * v22.y() - vNear2P3.y() * v22.x(),
+                                vNear2P3.dot(v22)) * 180.0 / CV_PI;
+
+        int p00 = 0;
+        int p11 = 0;
+        int p22 = 0;
+        int p33 = p3Index;
+        int p44 = 0;              
+
+        if(angle1 > angle2){
+            p00 = near1;
+            p11 = near2;
+        }
+        if(angle1 < angle2){
+            p00 = near2;
+            p11 = near1;
+        } 
+        
+        double distance1 = std::pow(bigMarkers[p00].center.x - farP1.x, 2) + 
+                            std::pow(bigMarkers[p00].center.y - farP1.y, 2);
+
+        double distance2 = std::pow(bigMarkers[p00].center.x - farP2.x, 2) + 
+                            std::pow(bigMarkers[p00].center.y - farP2.y, 2);
+
+        if(distance1 > distance2){
+            p22 = far1;
+            p44 = far2;
+        }
+
+        if(distance1 < distance2){
+            p22 = far2;
+            p44 = far1;
+        }
+
+        std::vector<ImageProcess::Circle> orderedMarkers;
+
+        orderedMarkers.push_back(bigMarkers[p00]);
+        orderedMarkers.push_back(bigMarkers[p11]);
+        orderedMarkers.push_back(bigMarkers[p22]);
+        orderedMarkers.push_back(bigMarkers[p33]);
+        orderedMarkers.push_back(bigMarkers[p44]);
+
+        return orderedMarkers;
+    }
 
     std::vector<cv::Mat> ImageProcess::loadGrayImage(const std::vector<std::string>& image_paths){
 
@@ -143,6 +321,49 @@ namespace camcalib {
         return allCountours;
     }
 
+    std::vector<std::vector<ImageProcess::Circle>> ImageProcess::sortCircleCenter(std::vector<std::vector<Circle>>& disorderedCenter){
+
+        std::vector<std::vector<ImageProcess::Circle>> sortedAllImages;
+        int numSize = static_cast<int>(disorderedCenter.size());
+
+        for(int i = 0; i < numSize; i++){
+
+            std::vector<ImageProcess::Circle> bigMarkers = getBigMarkers(disorderedCenter[i]);
+
+            if(bigMarkers.size() < 5){
+                std::cerr << "第 " << i << " 张图标志点数量不足 5 个" << std::endl;
+                sortedAllImages.push_back({});
+                continue;
+            }
+
+            MarkerDistanceInfo distanceInfo = findNearestAndFarthestMarkers(bigMarkers);
+            int p3Index = findRemainingMarkerIndex(distanceInfo);
+
+            if (p3Index == -1)
+            {
+                std::cerr << "p3 查找失败，大圆索引关系异常" << std::endl;
+                
+                sortedAllImages.push_back({});
+                continue;
+                
+            }
+
+            if (!isMarkerPairParallel(bigMarkers, distanceInfo))
+            {
+                std::cerr << "第 " << i << " 张图标志点寻找错误：最近点对与最远点对不平行" << std::endl;
+                sortedAllImages.push_back({});
+                continue;
+            }
+
+            sortedAllImages.push_back(orderBigMarkers(bigMarkers, distanceInfo, p3Index));
+
+        }
+
+
+        return sortedAllImages;
+
+    }
+
 
 
     void ImageProcess::showEdgeAndCircleCenters(const cv::Mat& binary, const std::vector<std::vector<cv::Point>>& contours, const std::vector<Circle>& centerPoints, const std::string& windowName){
@@ -171,6 +392,58 @@ namespace camcalib {
         cv::namedWindow(windowName, cv::WINDOW_NORMAL);
         cv::resizeWindow(windowName, 1200, 1000);
         cv::imshow(windowName, edgeDisplay);
+        cv::waitKey(0);
+
+    }
+
+
+    void ImageProcess::showSortedCircleCenters(const cv::Mat& image, const std::vector<Circle>& sortedCenterPoints, const std::string& windowName){
+
+        cv::Mat display;
+        if(image.channels() == 1){
+            cv::cvtColor(image, display, cv::COLOR_GRAY2BGR);
+        }else{
+            display = image.clone();
+        }
+
+        for(size_t i = 0; i < sortedCenterPoints.size(); i++){
+            const Circle& circle = sortedCenterPoints[i];
+            if(circle.radius <= 0.0){
+                continue;
+            }
+
+            cv::Point center(
+                static_cast<int>(std::round(circle.center.x)),
+                static_cast<int>(std::round(circle.center.y))
+            );
+
+            cv::circle(display, center, static_cast<int>(std::round(circle.radius)), cv::Scalar(0, 255, 255), 2);
+            cv::circle(display, center, 4, cv::Scalar(0, 0, 255), -1);
+            cv::drawMarker(display, center, cv::Scalar(255, 0, 0), cv::MARKER_CROSS, 16, 2);
+
+            std::string text = std::to_string(i) + " (" +
+                               std::to_string(static_cast<int>(std::round(circle.center.x))) + ", " +
+                               std::to_string(static_cast<int>(std::round(circle.center.y))) + ")";
+
+            cv::Point textPos(center.x + 8, center.y - 8);
+            textPos.x = std::max(0, std::min(textPos.x, display.cols - 160));
+            textPos.y = std::max(20, std::min(textPos.y, display.rows - 5));
+
+            cv::putText(
+                display,
+                text,
+                textPos,
+                cv::FONT_HERSHEY_SIMPLEX,
+                0.6,
+                cv::Scalar(0, 255, 0),
+                2,
+                cv::LINE_AA
+            );
+        }
+
+        cv::namedWindow(windowName, cv::WINDOW_NORMAL);
+        cv::resizeWindow(windowName, 1200, 1000);
+        cv::imshow(windowName, display);
         cv::waitKey(0);
 
     }
@@ -255,12 +528,12 @@ namespace camcalib {
         // 加载灰度图像
         std::vector<cv::Mat> images = loadImages();
 
-        // 图像预处理
+        // 图像预处理 检测边缘
         std::vector<std::vector<std::vector<cv::Point>>> coners = runDetectEdge(images);
 
-        // 对圆心进行排序
+        // 拟合圆心
+        std::vector<std::vector<Circle>> allCenterPoints;
 
-        // 检测边缘
         for(int i = 0; i < coners.size(); i++){
 
             std::vector<Circle> centerPoints;
@@ -272,15 +545,26 @@ namespace camcalib {
                 centerPoints.push_back(c);
 
             }
-
-            if(i == 6){
-                cv::Mat binary;
-                cv::threshold(images[i], binary, 0, 255, cv::THRESH_BINARY_INV | cv::THRESH_OTSU);
-                showEdgeAndCircleCenters(binary, coners[i], centerPoints, "Detected Edges " + std::to_string(i));
-            }
-
+            allCenterPoints.push_back(centerPoints);
+            //cv::Mat binary;
+            //cv::threshold(images[i], binary, 0, 255, cv::THRESH_BINARY_INV | cv::THRESH_OTSU);
+            //showEdgeAndCircleCenters(binary, coners[i], centerPoints, "Detected Edges " + std::to_string(i));
         }
 
+        // 对圆心进行排序 
+        std::vector<std::vector<Circle>> sortCenterPoints = sortCircleCenter(allCenterPoints);
+
+        for(size_t i = 0; i < sortCenterPoints.size() && i < images.size(); i++){
+            if(sortCenterPoints[i].empty()){
+                continue;
+            }
+
+            showSortedCircleCenters(
+                images[i],
+                sortCenterPoints[i],
+                "Sorted Circle Centers " + std::to_string(i)
+            );
+        }
 
         // 拟合圆心
 

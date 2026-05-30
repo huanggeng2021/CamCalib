@@ -29,6 +29,16 @@ public:
 
 private:
 
+    struct MarkerPair{
+        int first = -1;
+        int second = -1;
+    };
+
+    struct MarkerDistanceInfo{
+        MarkerPair nearest;
+        MarkerPair farthest;
+    };
+
     // 加载灰度图像
     std::vector<cv::Mat> loadGrayImage(const std::vector<std::string>& image_paths);
 
@@ -39,8 +49,22 @@ private:
     std::vector<std::vector<std::vector<cv::Point2i>>> getAllEdgePoints(const std::vector<cv::Mat>& images);
     // 图像预处理 检测圆的边缘
     std::vector<std::vector<std::vector<cv::Point>>> runDetectEdge(const std::vector<cv::Mat>& images);
+    
+    // 对圆心进行排序
+    std::vector<std::vector<Circle>> sortCircleCenter(std::vector<std::vector<Circle>>& disorderedCenter);
+    static std::vector<Circle> getBigMarkers(const std::vector<Circle>& circles);
+    static MarkerDistanceInfo findNearestAndFarthestMarkers(const std::vector<Circle>& bigMarkers);
+    static int findRemainingMarkerIndex(const MarkerDistanceInfo& distanceInfo);
+    static bool isMarkerPairParallel(const std::vector<Circle>& bigMarkers, const MarkerDistanceInfo& distanceInfo);
+    static std::vector<Circle> orderBigMarkers(
+        const std::vector<Circle>& bigMarkers,
+        const MarkerDistanceInfo& distanceInfo,
+        int p3Index
+    );
 
+    // 显示函数
     void showEdgeAndCircleCenters(const cv::Mat& binary, const std::vector<std::vector<cv::Point>>& contours, const std::vector<Circle>& centerPoints, const std::string& windowName);
+    void showSortedCircleCenters(const cv::Mat& image, const std::vector<Circle>& sortedCenterPoints, const std::string& windowName);
     void drawCenterPoints(cv::Mat& image, const std::vector<Circle>& centerPoints);
 
     // 拟合
