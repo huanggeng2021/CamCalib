@@ -7,7 +7,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-find_package(OpenCV REQUIRED COMPONENTS core imgcodecs imgproc highgui)
+find_package(OpenCV REQUIRED COMPONENTS core imgcodecs imgproc highgui calib3d)
 find_package(Eigen3 REQUIRED)
 
 file(GLOB_RECURSE CAMCALIB_SOURCES CONFIGURE_DEPENDS

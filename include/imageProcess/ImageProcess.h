@@ -18,12 +18,15 @@ public:
         std::vector<cv::Point2i> edge_points; // 圆边缘上的点
         cv::Point2d center; // 圆心坐标
         double radius; // 圆半径
+
+        double homo_row;
+        double homo_col;
     };
 
     // 加载图像入口
     std::vector<cv::Mat> loadImages();
 
-   
+    // 标定入口 
     void runCalibrate();
        
 
@@ -43,7 +46,6 @@ private:
     std::vector<cv::Mat> loadGrayImage(const std::vector<std::string>& image_paths);
 
     //------------- 图像预处理模块------------
-
     std::vector<cv::Mat> detecTheCircleEdge(const std::vector<cv::Mat>& images);
     std::vector<std::vector<cv::Point>> filterContours(const std::vector<std::vector<cv::Point>>& contours);
     std::vector<std::vector<std::vector<cv::Point2i>>> getAllEdgePoints(const std::vector<cv::Mat>& images);
@@ -62,9 +64,41 @@ private:
         int p3Index
     );
 
+    //计算变换矩阵
+    static std::vector<Eigen::Matrix3d> findHomography(const std::vector<std::vector<Circle>>& sortedCircleCenter);
+    // 变换到理想坐标系下
+
+    static std::vector<std::vector<Circle>> homographyCircleCenter(
+        const std::vector<Eigen::Matrix3d>& homo,
+        const std::vector<std::vector<Circle>>& unSortCircleCenter
+    );
+    static std::vector<std::vector<cv::Point2d>> generateWorldCoordinates(
+        const int imageNum,
+        const int calibRows,
+        const int calibClos
+    );
+
+
+
+
     // 显示函数
-    void showEdgeAndCircleCenters(const cv::Mat& binary, const std::vector<std::vector<cv::Point>>& contours, const std::vector<Circle>& centerPoints, const std::string& windowName);
-    void showSortedCircleCenters(const cv::Mat& image, const std::vector<Circle>& sortedCenterPoints, const std::string& windowName);
+    void showEdgeAndCircleCenters(
+        const cv::Mat& binary, 
+        const std::vector<std::vector<cv::Point>>& contours, 
+        const std::vector<Circle>& centerPoints, 
+        const std::string& windowName);
+
+    void showSortedCircleCenters(
+        const cv::Mat& image, 
+        const std::vector<Circle>& sortedCenterPoints, 
+        const std::string& windowName);
+
+    // 使用单映性矩阵变换原始图像
+    void showWarpedImage(
+        const cv::Mat& image, 
+        const Eigen::Matrix3d& homography, 
+        const std::string& windowName);
+
     void drawCenterPoints(cv::Mat& image, const std::vector<Circle>& centerPoints);
 
     // 拟合

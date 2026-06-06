@@ -3,7 +3,10 @@ build/
 cmake-build-*/
 
 # IDE files
-.vscode/
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
 .idea/
 *.swp
 *.swo

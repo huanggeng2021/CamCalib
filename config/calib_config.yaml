@@ -7,3 +7,9 @@ image_extensions:
   - ".png"
   - ".bmp"
 read_grayscale: 1
+
+calib_rows: 9
+calib_cols: 11
+calib_centerDistance: 15
+
+
