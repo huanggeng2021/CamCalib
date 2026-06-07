@@ -51,7 +51,18 @@ private:
     std::vector<std::vector<std::vector<cv::Point2i>>> getAllEdgePoints(const std::vector<cv::Mat>& images);
     // 图像预处理 检测圆的边缘
     std::vector<std::vector<std::vector<cv::Point>>> runDetectEdge(const std::vector<cv::Mat>& images);
+
+    // 亚像素边缘提取部分
+    std::vector<std::vector<std::vector<cv::Point>>> runDetectSubPixelEdge(const std::vector<cv::Mat>& images);
+
+
+
+
+
     
+    // 圆心拟合
+    Circle getCircleCenter(const std::vector<cv::Point2i>& points);
+
     // 对圆心进行排序
     std::vector<std::vector<Circle>> sortCircleCenter(std::vector<std::vector<Circle>>& disorderedCenter);
     static std::vector<Circle> getBigMarkers(const std::vector<Circle>& circles);
@@ -72,16 +83,38 @@ private:
         const std::vector<Eigen::Matrix3d>& homo,
         const std::vector<std::vector<Circle>>& unSortCircleCenter
     );
-    static std::vector<std::vector<cv::Point2d>> generateWorldCoordinates(
+
+    static std::vector<std::vector<cv::Point3f>> generateWorldCoordinates(
         const int imageNum,
         const int calibRows,
-        const int calibClos
+        const int calibCols,
+        const double centerDist
     );
 
 
 
 
-    // 显示函数
+    // 辅助调试函数
+    static cv::Point2d applyHomography(
+        const Eigen::Matrix3d& homography,
+        const cv::Point2d& point
+    );
+
+    static Eigen::Matrix3d cvMatToEigenMat3d(const cv::Mat& mat);
+
+    static void printHomographyValidation(
+        int imageIndex,
+        const std::vector<cv::Point2d>& idealCenter,
+        const std::vector<Circle>& sortedCircleCenter,
+        const Eigen::Matrix3d& customH,
+        const Eigen::Matrix3d& cvH
+    );
+
+    static void printCircleList(
+        const std::string& title,
+        const std::vector<Circle>& circles
+    );
+
     void showEdgeAndCircleCenters(
         const cv::Mat& binary, 
         const std::vector<std::vector<cv::Point>>& contours, 
@@ -101,8 +134,7 @@ private:
 
     void drawCenterPoints(cv::Mat& image, const std::vector<Circle>& centerPoints);
 
-    // 拟合
-    Circle getCircleCenter(const std::vector<cv::Point2i>& points);
+
 
 
 };

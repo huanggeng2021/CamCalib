@@ -106,7 +106,7 @@ namespace camcalib {
             parallelAngle = 180.0 - parallelAngle;
         }
 
-        std::cout << "angle = " << parallelAngle << std::endl;
+        // std::cout << "angle = " << parallelAngle << std::endl;
 
         return parallelAngle <= 10.0;
     }
@@ -215,70 +215,68 @@ namespace camcalib {
         return images;
     }
 
-    namespace {
-        cv::Point2d applyHomography(const Eigen::Matrix3d& homography, const cv::Point2d& point){
-            Eigen::Vector3d p(point.x, point.y, 1.0);
-            Eigen::Vector3d projected = homography * p;
+    cv::Point2d ImageProcess::applyHomography(const Eigen::Matrix3d& homography, const cv::Point2d& point){
+        Eigen::Vector3d p(point.x, point.y, 1.0);
+        Eigen::Vector3d projected = homography * p;
 
-            if(std::abs(projected(2)) < 1e-12){
-                return cv::Point2d(0.0, 0.0);
-            }
-
-            return cv::Point2d(
-                projected(0) / projected(2),
-                projected(1) / projected(2)
-            );
+        if(std::abs(projected(2)) < 1e-12){
+            return cv::Point2d(0.0, 0.0);
         }
 
-        Eigen::Matrix3d cvMatToEigenMat3d(const cv::Mat& mat){
-            Eigen::Matrix3d result = Eigen::Matrix3d::Identity();
-            for(int row = 0; row < 3; ++row){
-                for(int col = 0; col < 3; ++col){
-                    result(row, col) = mat.at<double>(row, col);
-                }
-            }
-            return result;
-        }
+        return cv::Point2d(
+            projected(0) / projected(2),
+            projected(1) / projected(2)
+        );
+    }
 
-        void printHomographyValidation(
-            int imageIndex,
-            const std::vector<cv::Point2d>& idealCenter,
-            const std::vector<camcalib::ImageProcess::Circle>& sortedCircleCenter,
-            const Eigen::Matrix3d& customH,
-            const Eigen::Matrix3d& cvH
-        ){
-            std::cout << "Image " << imageIndex << " control point reprojection:" << std::endl;
-            for(size_t i = 0; i < idealCenter.size() && i < sortedCircleCenter.size(); ++i){
-                const cv::Point2d& idealPoint = idealCenter[i];
-                const cv::Point2d& imagePoint = sortedCircleCenter[i].center;
-                cv::Point2d customProjected = applyHomography(customH, idealPoint);
-                cv::Point2d cvProjected = applyHomography(cvH, idealPoint);
-
-                double customError = cv::norm(customProjected - imagePoint);
-                double cvError = cv::norm(cvProjected - imagePoint);
-
-                std::cout << "  [" << i << "] ideal(" << idealPoint.x << ", " << idealPoint.y << ")"
-                          << " -> image measured(" << imagePoint.x << ", " << imagePoint.y << ")"
-                          << " custom(" << customProjected.x << ", " << customProjected.y << ")"
-                          << " err=" << customError
-                          << " cv(" << cvProjected.x << ", " << cvProjected.y << ")"
-                          << " err=" << cvError
-                          << std::endl;
+    Eigen::Matrix3d ImageProcess::cvMatToEigenMat3d(const cv::Mat& mat){
+        Eigen::Matrix3d result = Eigen::Matrix3d::Identity();
+        for(int row = 0; row < 3; ++row){
+            for(int col = 0; col < 3; ++col){
+                result(row, col) = mat.at<double>(row, col);
             }
         }
+        return result;
+    }
 
-        void printCircleList(const std::string& title, const std::vector<camcalib::ImageProcess::Circle>& circles){
-            std::cout << title << " size = " << circles.size() << std::endl;
-            for(size_t i = 0; i < circles.size(); ++i){
-                const auto& circle = circles[i];
-                std::cout << "  [" << i << "]"
-                          << " image(x=" << circle.center.x
-                          << ", y=" << circle.center.y << ")"
-                          << " radius=" << circle.radius
-                          << " ideal(row=" << circle.homo_row
-                          << ", col=" << circle.homo_col << ")"
-                          << std::endl;
-            }
+    void ImageProcess::printHomographyValidation(
+        int imageIndex,
+        const std::vector<cv::Point2d>& idealCenter,
+        const std::vector<Circle>& sortedCircleCenter,
+        const Eigen::Matrix3d& customH,
+        const Eigen::Matrix3d& cvH
+    ){
+        std::cout << "Image " << imageIndex << " control point reprojection:" << std::endl;
+        for(size_t i = 0; i < idealCenter.size() && i < sortedCircleCenter.size(); ++i){
+            const cv::Point2d& idealPoint = idealCenter[i];
+            const cv::Point2d& imagePoint = sortedCircleCenter[i].center;
+            cv::Point2d customProjected = applyHomography(customH, idealPoint);
+            cv::Point2d cvProjected = applyHomography(cvH, idealPoint);
+
+            double customError = cv::norm(customProjected - imagePoint);
+            double cvError = cv::norm(cvProjected - imagePoint);
+
+            std::cout << "  [" << i << "] ideal(" << idealPoint.x << ", " << idealPoint.y << ")"
+                      << " -> image measured(" << imagePoint.x << ", " << imagePoint.y << ")"
+                      << " custom(" << customProjected.x << ", " << customProjected.y << ")"
+                      << " err=" << customError
+                      << " cv(" << cvProjected.x << ", " << cvProjected.y << ")"
+                      << " err=" << cvError
+                      << std::endl;
+        }
+    }
+
+    void ImageProcess::printCircleList(const std::string& title, const std::vector<Circle>& circles){
+        std::cout << title << " size = " << circles.size() << std::endl;
+        for(size_t i = 0; i < circles.size(); ++i){
+            const auto& circle = circles[i];
+            std::cout << "  [" << i << "]"
+                      << " image(x=" << circle.center.x
+                      << ", y=" << circle.center.y << ")"
+                      << " radius=" << circle.radius
+                      << " ideal(row=" << circle.homo_row
+                      << ", col=" << circle.homo_col << ")"
+                      << std::endl;
         }
     }
 
@@ -380,7 +378,6 @@ namespace camcalib {
 
             std::vector<std::vector<cv::Point>> filterdContours = filterContours(contours);
 
-            std::cout << filterdContours.size() << std::endl;
             allCountours.push_back(filterdContours);
         }
         
@@ -396,7 +393,7 @@ namespace camcalib {
         for(int i = 0; i < numSize; i++){
 
             std::vector<ImageProcess::Circle> bigMarkers = getBigMarkers(disorderedCenter[i]);
-            printCircleList("Image " + std::to_string(i) + " big markers(before order)", bigMarkers);
+            //printCircleList("Image " + std::to_string(i) + " big markers(before order)", bigMarkers);
 
             if(bigMarkers.size() < 5){
                 std::cerr << "第 " << i << " 张图标志点数量不足 5 个" << std::endl;
@@ -424,7 +421,7 @@ namespace camcalib {
             }
 
             std::vector<ImageProcess::Circle> orderedMarkers = orderBigMarkers(bigMarkers, distanceInfo, p3Index);
-            printCircleList("Image " + std::to_string(i) + " ordered big markers", orderedMarkers);
+            //printCircleList("Image " + std::to_string(i) + " ordered big markers", orderedMarkers);
             sortedAllImages.push_back(orderedMarkers);
 
         }
@@ -517,11 +514,11 @@ namespace camcalib {
             cv::Mat cvH = cv::findHomography(idealCenter, imageCenters, 0);
             Eigen::Matrix3d cvHomography = cvMatToEigenMat3d(cvH);
 
-            std::cout << "Image " << iImgNum << " homography H:" << std::endl;
-            std::cout << H << std::endl;
-            std::cout << "Image " << iImgNum << " OpenCV homography Hcv:" << std::endl;
-            std::cout << cvHomography << std::endl;
-            printHomographyValidation(iImgNum, idealCenter, sortedCircleCenter[iImgNum], H, cvHomography);
+            // std::cout << "Image " << iImgNum << " homography H:" << std::endl;   调试信息
+            // std::cout << H << std::endl;
+            // std::cout << "Image " << iImgNum << " OpenCV homography Hcv:" << std::endl;
+            // std::cout << cvHomography << std::endl;
+            // printHomographyValidation(iImgNum, idealCenter, sortedCircleCenter[iImgNum], H, cvHomography); 
             homographyVec.push_back(H);
 
 
@@ -579,7 +576,7 @@ namespace camcalib {
                 homoCenterVec.push_back(c);
             }
 
-            printCircleList("Image " + std::to_string(iImg) + " all centers(before homography sort)", homoCenterVec);
+            // printCircleList("Image " + std::to_string(iImg) + " all centers(before homography sort)", homoCenterVec);
 
             // 排序
             // 先按行 homo_row 从小到大，再按列 homo_col 从小到大
@@ -597,7 +594,7 @@ namespace camcalib {
                     return a.homo_col < b.homo_col;
                 });
 
-            printCircleList("Image " + std::to_string(iImg) + " all centers(after homography sort)", homoCenterVec);
+            // printCircleList("Image " + std::to_string(iImg) + " all centers(after homography sort)", homoCenterVec);
             sortCircleCenter.push_back(homoCenterVec);
         }
 
@@ -606,10 +603,33 @@ namespace camcalib {
     };
 
     
-    std::vector<std::vector<cv::Point2d>> ImageProcess::generateWorldCoordinates(const int imageNum,const int calibRows,const int calibClos){
+    std::vector<std::vector<cv::Point3f>> ImageProcess::generateWorldCoordinates(
+        const int imageNum,const int calibRows,const int calibCols, const double centerDist){
 
-        std::vector<std::vector<cv::Point2d>> worldPointsVec;
+        std::vector<std::vector<cv::Point3f>> worldPointsVec;
         worldPointsVec.reserve(imageNum);
+
+        std::vector<cv::Point3f> singleWorldPoints;
+        singleWorldPoints.reserve(calibRows * calibCols);
+
+        // 中心偏置
+        double centerOffsetX = (calibCols / 2) * centerDist;  
+        double centerOffsetY = (calibRows / 2) * centerDist;
+
+        for(int rows = 0; rows < calibRows; rows++){
+            for(int cols = 0; cols < calibCols; cols++){
+
+                double x = cols * centerDist - centerOffsetX;  // 列坐标
+                double y = rows * centerDist - centerOffsetY;  // 行坐标
+                double z = 0;
+                
+                cv::Point3d p(x, y, z);
+
+                singleWorldPoints.push_back(p);
+            }
+        }
+
+        worldPointsVec.resize(imageNum, singleWorldPoints);
 
         return worldPointsVec;
     }
@@ -856,10 +876,7 @@ namespace camcalib {
 
             }
             allCenterPoints.push_back(centerPoints);
-            printCircleList("Image " + std::to_string(i) + " fitted centers", centerPoints);
-            //cv::Mat binary;
-            //cv::threshold(images[i], binary, 0, 255, cv::THRESH_BINARY_INV | cv::THRESH_OTSU);
-            //showEdgeAndCircleCenters(binary, coners[i], centerPoints, "Detected Edges " + std::to_string(i));
+            //printCircleList("Image " + std::to_string(i) + " fitted centers", centerPoints);
         }
 
         // 对圆心进行排序 
@@ -881,9 +898,9 @@ namespace camcalib {
         //计算变换矩阵
         std::vector<Eigen::Matrix3d> homoVec = findHomography(sortCenterPoints);
 
-        std::vector<std::vector<ImageProcess::Circle>> sortedCircleCenter = homographyCircleCenter(homoVec,allCenterPoints);
+        std::vector<std::vector<ImageProcess::Circle>> sortedCircleCenter = homographyCircleCenter(homoVec, allCenterPoints);
 
-        for(size_t i = 0; i < sortedCircleCenter.size() && i < images.size(); i++){
+/*         for(size_t i = 0; i < sortedCircleCenter.size() && i < images.size(); i++){
             if(sortedCircleCenter[i].empty()){
                 continue;
             }
@@ -899,11 +916,35 @@ namespace camcalib {
                 sortedCircleCenter[i],
                 "Sorted Circle Centers " + std::to_string(i)
             );
-        }
+        } */
 
         // 计算坐标系下的世界坐标点
+        std::vector<std::vector<cv::Point3f>> worldCorrdianates = generateWorldCoordinates(sortedCircleCenter.size(), 9 , 11, 15.0);
+
 
         // 计算标定参数
+        cv::Mat cameraMatrix;
+        cv::Mat distCoeffs;
+        std::vector<cv::Mat> rvecs;
+        std::vector<cv::Mat> tvecs;
+        double rms = 0.0;
+        std::vector<std::vector<cv::Point2f>> imageCorrdiantes;
+
+        for(int i = 0; i < sortedCircleCenter.size(); i ++){
+            std::vector<cv::Point2f> singleCorrdiantes;
+            for (int j = 0; j < sortedCircleCenter[i].size(); j++){
+                
+                cv::Point2f p  = sortedCircleCenter[i][j].center;
+                singleCorrdiantes.push_back(p);
+
+            }
+            imageCorrdiantes.push_back(singleCorrdiantes);
+        }
+
+        rms = cv::calibrateCamera(worldCorrdianates, imageCorrdiantes, cv::Size(images[0].cols, images[0].rows),
+        cameraMatrix, distCoeffs, rvecs, tvecs);
+        std::cout << "rms "<< rms << std::endl;
+
 
         // 计算重投影误差 评估质量
 
