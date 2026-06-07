@@ -13,3 +13,11 @@ calib_cols: 11
 calib_centerDistance: 15
 
 
+log_enabled: 1
+log_output_file: "debug_output/run.log"
+debug_mode: 0
+debug_save_images: 1
+debug_show_windows: 0
+debug_output_dir: "debug_output"
+
+

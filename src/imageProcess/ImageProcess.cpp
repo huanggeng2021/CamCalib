@@ -1,10 +1,13 @@
 #include "imageProcess/ImageProcess.h"
 #include "utils/Config.h"
 #include <algorithm>
+#include <ctime>
 #include <filesystem>
-#include <iostream>
 #include <cmath>
+#include <iomanip>
+#include <iostream>
 #include <limits>
+#include <sstream>
 
 namespace camcalib {    
 
@@ -195,7 +198,7 @@ namespace camcalib {
             cv::Mat image = cv::imread(path);
 
             if(image.empty()){
-                std::cerr << "Failed to load image: " << path << std::endl;
+                logError("Failed to load image: " + path);
                 continue;
             }
 
@@ -282,33 +285,39 @@ namespace camcalib {
 
 
 
-    std::vector<cv::Mat> ImageProcess::loadImages(){
-
-        // step1: read config
-        std::cout << "Current working directory: " << std::filesystem::current_path().string() << std::endl;
-        std::string yaml_path = "config/calib_config.yaml";
-        
-        camcalib::CaliConfig config;
-        if (!camcalib::ConfigReader::readConfig(yaml_path, config)) {
-            std::cerr << "Failed to read config file: " << yaml_path << std::endl;
-            return {};
-        }
-
+    std::vector<cv::Mat> ImageProcess::loadImages(const CaliConfig& config){
         // step2: get image files from config image directory
-        std::vector<std::string> image_files = camcalib::ConfigReader::getImageFiles(config.image_dir);
+        std::vector<std::string> image_files = camcalib::ConfigReader::getImageFiles(
+            config.image_dir,
+            config.image_extensions
+        );
         if (image_files.empty()) {
-            std::cerr << "No image files found in directory: " << config.image_dir << std::endl;
+            logError("No image files found in directory: " + config.image_dir);
             return {};
         }
 
-        std::cout << "Found " << image_files.size() << " image files:" << std::endl;
+        logInfo("Found " + std::to_string(image_files.size()) + " image files in " + config.image_dir);
         for (const auto& file : image_files) {
-            std::cout << "  " << file << std::endl;
+            logInfo("Image file: " + file);
         }
 
-        std::vector<cv::Mat> gray_images = loadGrayImage(image_files);
+        if(config.read_grayscale){
+            return loadGrayImage(image_files);
+        }
 
-        return gray_images;
+        std::vector<cv::Mat> images;
+        images.reserve(image_files.size());
+
+        for(const auto& path : image_files){
+            cv::Mat image = cv::imread(path, cv::IMREAD_COLOR);
+            if(image.empty()){
+                logError("Failed to load image: " + path);
+                continue;
+            }
+            images.push_back(image);
+        }
+
+        return images;
     }
 
 
@@ -370,8 +379,7 @@ namespace camcalib {
 
         for(int i = 0; i< images.size(); i++){
 
-            cv::Mat binary;
-            cv::threshold(images[i], binary, 0, 255, cv::THRESH_BINARY_INV  | cv::THRESH_OTSU);
+            cv::Mat binary = buildBinaryImage(images[i]);
             
             std::vector<std::vector<cv::Point>> contours;
             cv::findContours(binary.clone(), contours, cv::RETR_EXTERNAL, cv::CHAIN_APPROX_NONE);
@@ -385,6 +393,18 @@ namespace camcalib {
         return allCountours;
     }
 
+    std::vector<std::vector<std::vector<cv::Point2f>>> ImageProcess::runDetectSubPixelEdge(const std::vector<cv::Mat>& images){
+
+        // 检测边缘
+
+        // 亚像素细化
+
+        return {};
+
+    }
+
+
+
     std::vector<std::vector<ImageProcess::Circle>> ImageProcess::sortCircleCenter(std::vector<std::vector<Circle>>& disorderedCenter){
 
         std::vector<std::vector<ImageProcess::Circle>> sortedAllImages;
@@ -396,7 +416,7 @@ namespace camcalib {
             //printCircleList("Image " + std::to_string(i) + " big markers(before order)", bigMarkers);
 
             if(bigMarkers.size() < 5){
-                std::cerr << "第 " << i << " 张图标志点数量不足 5 个" << std::endl;
+                logError("Image " + std::to_string(i) + " does not have enough marker circles.");
                 sortedAllImages.push_back({});
                 continue;
             }
@@ -406,7 +426,7 @@ namespace camcalib {
 
             if (p3Index == -1)
             {
-                std::cerr << "p3 查找失败，大圆索引关系异常" << std::endl;
+                logError("Image " + std::to_string(i) + " failed to find p3 marker.");
                 
                 sortedAllImages.push_back({});
                 continue;
@@ -415,7 +435,7 @@ namespace camcalib {
 
             if (!isMarkerPairParallel(bigMarkers, distanceInfo))
             {
-                std::cerr << "第 " << i << " 张图标志点寻找错误：最近点对与最远点对不平行" << std::endl;
+                logError("Image " + std::to_string(i) + " marker ordering failed because marker pairs are not parallel.");
                 sortedAllImages.push_back({});
                 continue;
             }
@@ -541,7 +561,6 @@ namespace camcalib {
 
     
         if(unSortCircleCenter.size() != homo.size()){
-            std::cout<< "homo size unequal  imge size" << std::endl;
             return {};
         }
 
@@ -634,8 +653,25 @@ namespace camcalib {
         return worldPointsVec;
     }
 
+    cv::Mat ImageProcess::buildBinaryImage(const cv::Mat& image){
 
-    void ImageProcess::showEdgeAndCircleCenters(const cv::Mat& binary, const std::vector<std::vector<cv::Point>>& contours, const std::vector<Circle>& centerPoints, const std::string& windowName){
+        cv::Mat gray;
+        if(image.channels() == 1){
+            gray = image;
+        }else{
+            cv::cvtColor(image, gray, cv::COLOR_BGR2GRAY);
+        }
+
+        cv::Mat binary;
+        cv::threshold(gray, binary, 0, 255, cv::THRESH_BINARY_INV | cv::THRESH_OTSU);
+        return binary;
+    }
+
+    cv::Mat ImageProcess::renderEdgeAndCircleCenters(
+        const cv::Mat& binary,
+        const std::vector<std::vector<cv::Point>>& contours,
+        const std::vector<Circle>& centerPoints
+    ){
 
         cv::Mat edgeDisplay;
         cv::cvtColor(binary, edgeDisplay, cv::COLOR_GRAY2BGR);
@@ -658,15 +694,13 @@ namespace camcalib {
             );
         }
 
-        cv::namedWindow(windowName, cv::WINDOW_NORMAL);
-        cv::resizeWindow(windowName, 1200, 1000);
-        cv::imshow(windowName, edgeDisplay);
-        cv::waitKey(0);
-
+        return edgeDisplay;
     }
 
-
-    void ImageProcess::showSortedCircleCenters(const cv::Mat& image, const std::vector<Circle>& sortedCenterPoints, const std::string& windowName){
+    cv::Mat ImageProcess::renderSortedCircleCenters(
+        const cv::Mat& image,
+        const std::vector<Circle>& sortedCenterPoints
+    ){
 
         cv::Mat display;
         if(image.channels() == 1){
@@ -707,6 +741,109 @@ namespace camcalib {
                 cv::LINE_AA
             );
         }
+
+        return display;
+    }
+
+    void ImageProcess::initializeLogger(const CaliConfig& config){
+
+        log_enabled_ = config.log_enabled;
+        if(!log_enabled_){
+            return;
+        }
+
+        std::filesystem::path logPath = config.log_output_file;
+        try{
+            if(logPath.has_parent_path()){
+                std::filesystem::create_directories(logPath.parent_path());
+            }
+            log_stream_.open(logPath, std::ios::out | std::ios::app);
+        }catch(const std::filesystem::filesystem_error& e){
+            std::cerr << "Failed to prepare log file: " << e.what() << std::endl;
+            log_enabled_ = false;
+            return;
+        }
+
+        if(!log_stream_.is_open()){
+            std::cerr << "Failed to open log file: " << logPath << std::endl;
+            log_enabled_ = false;
+        }
+    }
+
+    void ImageProcess::shutdownLogger(){
+
+        if(log_stream_.is_open()){
+            log_stream_.flush();
+            log_stream_.close();
+        }
+        log_enabled_ = false;
+    }
+
+    void ImageProcess::logMessage(const std::string& level, const std::string& message){
+
+        std::time_t now = std::time(nullptr);
+        std::tm* localTime = std::localtime(&now);
+
+        std::ostringstream stream;
+        if(localTime != nullptr){
+            stream << std::put_time(localTime, "%Y-%m-%d %H:%M:%S");
+        }else{
+            stream << "unknown-time";
+        }
+        stream << " [" << level << "] " << message;
+
+        if(level == "ERROR"){
+            std::cerr << stream.str() << std::endl;
+        }else{
+            std::cout << stream.str() << std::endl;
+        }
+
+        if(log_enabled_ && log_stream_.is_open()){
+            log_stream_ << stream.str() << std::endl;
+        }
+    }
+
+    void ImageProcess::logInfo(const std::string& message){
+        logMessage("INFO", message);
+    }
+
+    void ImageProcess::logError(const std::string& message){
+        logMessage("ERROR", message);
+    }
+
+    bool ImageProcess::saveDebugImage(const std::filesystem::path& outputPath, const cv::Mat& image){
+
+        try{
+            std::filesystem::create_directories(outputPath.parent_path());
+        }catch(const std::filesystem::filesystem_error& e){
+            logError("Failed to create debug directory: " + std::string(e.what()));
+            return false;
+        }
+
+        if(!cv::imwrite(outputPath.string(), image)){
+            logError("Failed to save debug image: " + outputPath.string());
+            return false;
+        }
+
+        return true;
+    }
+
+
+    void ImageProcess::showEdgeAndCircleCenters(const cv::Mat& binary, const std::vector<std::vector<cv::Point>>& contours, const std::vector<Circle>& centerPoints, const std::string& windowName){
+
+        cv::Mat edgeDisplay = renderEdgeAndCircleCenters(binary, contours, centerPoints);
+
+        cv::namedWindow(windowName, cv::WINDOW_NORMAL);
+        cv::resizeWindow(windowName, 1200, 1000);
+        cv::imshow(windowName, edgeDisplay);
+        cv::waitKey(0);
+
+    }
+
+
+    void ImageProcess::showSortedCircleCenters(const cv::Mat& image, const std::vector<Circle>& sortedCenterPoints, const std::string& windowName){
+
+        cv::Mat display = renderSortedCircleCenters(image, sortedCenterPoints);
 
         cv::namedWindow(windowName, cv::WINDOW_NORMAL);
         cv::resizeWindow(windowName, 1200, 1000);
@@ -855,11 +992,51 @@ namespace camcalib {
     // 
     void ImageProcess::runCalibrate(){
 
+        std::string yaml_path = "config/calib_config.yaml";
+
+        CaliConfig config;
+        if (!ConfigReader::readConfig(yaml_path, config)) {
+            std::cerr << "Failed to read config file: " << yaml_path << std::endl;
+            return;
+        }
+
+        initializeLogger(config);
+        logInfo("Calibration started.");
+        logInfo("Current working directory: " + std::filesystem::current_path().string());
+        logInfo("Loaded config file: " + yaml_path);
+
+        const bool shouldSaveDebugImages = config.debug_mode && config.debug_save_images;
+        const bool shouldShowDebugWindows = config.debug_mode && config.debug_show_windows;
+        logInfo(
+            "Options: log_enabled=" + std::to_string(config.log_enabled) +
+            ", debug_mode=" + std::to_string(config.debug_mode) +
+            ", debug_save_images=" + std::to_string(config.debug_save_images) +
+            ", debug_show_windows=" + std::to_string(config.debug_show_windows)
+        );
+
         // 加载灰度图像
-        std::vector<cv::Mat> images = loadImages();
+        std::vector<cv::Mat> images = loadImages(config);
+        if(images.empty()){
+            logError("Calibration aborted because no input images were loaded.");
+            shutdownLogger();
+            return;
+        }
+
+        std::filesystem::path debugRoot = config.debug_output_dir;
+        if(shouldSaveDebugImages){
+            try{
+                std::filesystem::create_directories(debugRoot);
+            }catch(const std::filesystem::filesystem_error& e){
+                logError("Failed to create debug output directory: " + std::string(e.what()));
+                shutdownLogger();
+                return;
+            }
+            logInfo("Debug images will be saved to: " + debugRoot.string());
+        }
 
         // 图像预处理 检测边缘
         std::vector<std::vector<std::vector<cv::Point>>> coners = runDetectEdge(images);
+        logInfo("Edge detection completed for " + std::to_string(coners.size()) + " images.");
 
         // 拟合圆心
         std::vector<std::vector<Circle>> allCenterPoints;
@@ -876,50 +1053,120 @@ namespace camcalib {
 
             }
             allCenterPoints.push_back(centerPoints);
-            //printCircleList("Image " + std::to_string(i) + " fitted centers", centerPoints);
+            logInfo(
+                "Image " + std::to_string(i) +
+                ": contours=" + std::to_string(coners[i].size()) +
+                ", fitted_centers=" + std::to_string(centerPoints.size())
+            );
+
+            if(shouldSaveDebugImages){
+                std::ostringstream imageFolderName;
+                imageFolderName << "image_" << std::setw(3) << std::setfill('0') << i;
+                std::filesystem::path imageDebugDir = debugRoot / imageFolderName.str();
+
+                cv::Mat binary = buildBinaryImage(images[i]);
+                saveDebugImage(
+                    imageDebugDir / "01_detected_edges.png",
+                    renderEdgeAndCircleCenters(binary, coners[i], centerPoints)
+                );
+                saveDebugImage(
+                    imageDebugDir / "02_fitted_centers.png",
+                    renderSortedCircleCenters(images[i], centerPoints)
+                );
+                logInfo("Saved debug images for image " + std::to_string(i) + " fitted centers stage.");
+            }
         }
 
         // 对圆心进行排序 
         std::vector<std::vector<Circle>> sortCenterPoints = sortCircleCenter(allCenterPoints);
-        
-/*         // 显示排序结果
-        for(size_t i = 0; i < sortCenterPoints.size() && i < images.size(); i++){
-            if(sortCenterPoints[i].empty()){
-                continue;
-            }
+        logInfo("Marker sorting completed.");
 
-            showSortedCircleCenters(
-                images[i],
-                sortCenterPoints[i],
-                "Sorted Circle Centers " + std::to_string(i)
-            );
-        }  */
+        if(shouldSaveDebugImages){
+            for(size_t i = 0; i < sortCenterPoints.size() && i < images.size(); i++){
+                if(sortCenterPoints[i].empty()){
+                    logError("Image " + std::to_string(i) + " has no sorted marker output.");
+                    continue;
+                }
+
+                std::ostringstream imageFolderName;
+                imageFolderName << "image_" << std::setw(3) << std::setfill('0') << i;
+                std::filesystem::path imageDebugDir = debugRoot / imageFolderName.str();
+
+                saveDebugImage(
+                    imageDebugDir / "03_sorted_markers.png",
+                    renderSortedCircleCenters(images[i], sortCenterPoints[i])
+                );
+                logInfo("Saved sorted marker debug image for image " + std::to_string(i) + ".");
+            }
+        }
+
+        if(shouldShowDebugWindows){
+            for(size_t i = 0; i < sortCenterPoints.size() && i < images.size(); i++){
+                if(sortCenterPoints[i].empty()){
+                    continue;
+                }
+
+                showSortedCircleCenters(
+                    images[i],
+                    sortCenterPoints[i],
+                    "Sorted Circle Centers " + std::to_string(i)
+                );
+            }
+        }
 
         //计算变换矩阵
         std::vector<Eigen::Matrix3d> homoVec = findHomography(sortCenterPoints);
+        logInfo("Homography computation completed.");
 
         std::vector<std::vector<ImageProcess::Circle>> sortedCircleCenter = homographyCircleCenter(homoVec, allCenterPoints);
+        logInfo("Full board sorting completed.");
 
-/*         for(size_t i = 0; i < sortedCircleCenter.size() && i < images.size(); i++){
-            if(sortedCircleCenter[i].empty()){
-                continue;
+        if(shouldSaveDebugImages){
+            for(size_t i = 0; i < sortedCircleCenter.size() && i < images.size(); i++){
+                if(sortedCircleCenter[i].empty()){
+                    logError("Image " + std::to_string(i) + " has no final sorted board output.");
+                    continue;
+                }
+
+                std::ostringstream imageFolderName;
+                imageFolderName << "image_" << std::setw(3) << std::setfill('0') << i;
+                std::filesystem::path imageDebugDir = debugRoot / imageFolderName.str();
+
+                saveDebugImage(
+                    imageDebugDir / "04_sorted_board.png",
+                    renderSortedCircleCenters(images[i], sortedCircleCenter[i])
+                );
+                logInfo("Saved final sorted board debug image for image " + std::to_string(i) + ".");
             }
+        }
 
-            showWarpedImage(
-                images[i],
-                homoVec[i],
-                "Warped Image " + std::to_string(i)
-            );
+        if(shouldShowDebugWindows){
+            for(size_t i = 0; i < sortedCircleCenter.size() && i < images.size(); i++){
+                if(sortedCircleCenter[i].empty()){
+                    continue;
+                }
 
-            showSortedCircleCenters(
-                images[i],
-                sortedCircleCenter[i],
-                "Sorted Circle Centers " + std::to_string(i)
-            );
-        } */
+                showWarpedImage(
+                    images[i],
+                    homoVec[i],
+                    "Warped Image " + std::to_string(i)
+                );
+
+                showSortedCircleCenters(
+                    images[i],
+                    sortedCircleCenter[i],
+                    "Sorted Circle Centers " + std::to_string(i)
+                );
+            }
+        }
 
         // 计算坐标系下的世界坐标点
-        std::vector<std::vector<cv::Point3f>> worldCorrdianates = generateWorldCoordinates(sortedCircleCenter.size(), 9 , 11, 15.0);
+        std::vector<std::vector<cv::Point3f>> worldCorrdianates = generateWorldCoordinates(
+            sortedCircleCenter.size(),
+            config.calib_rows,
+            config.calib_cols,
+            config.calib_centerDistance
+        );
 
 
         // 计算标定参数
@@ -943,10 +1190,12 @@ namespace camcalib {
 
         rms = cv::calibrateCamera(worldCorrdianates, imageCorrdiantes, cv::Size(images[0].cols, images[0].rows),
         cameraMatrix, distCoeffs, rvecs, tvecs);
-        std::cout << "rms "<< rms << std::endl;
+        logInfo("Calibration finished. RMS = " + std::to_string(rms));
 
 
         // 计算重投影误差 评估质量
+
+        shutdownLogger();
 
 
     }

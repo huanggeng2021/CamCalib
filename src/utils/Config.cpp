@@ -1,35 +1,104 @@
 #include "utils/Config.h"
 #include <opencv2/core.hpp>
 #include <algorithm>
+#include <cctype>
 #include <filesystem>
 #include <iostream>
+#include <string_view>
 
 namespace fs = std::filesystem;
 
 namespace camcalib {
 
 bool ConfigReader::readConfig(const std::string& yaml_path, CaliConfig& config) {
-    cv::FileStorage fs(yaml_path, cv::FileStorage::READ);
-    if (!fs.isOpened()) {
+    cv::FileStorage fileStorage(yaml_path, cv::FileStorage::READ);
+    if (!fileStorage.isOpened()) {
         std::cerr << "Failed to open config file: " << yaml_path << std::endl;
         return false;
     }
-    fs["board_width"] >> config.board_width;
-    fs["board_height"] >> config.board_height;
-    fs["square_size"] >> config.square_size;
-    fs["image_dir"] >> config.image_dir;
-    fs.release();
+
+    fileStorage["image_dir"] >> config.image_dir;
+
+    config.image_extensions.clear();
+    cv::FileNode extNode = fileStorage["image_extensions"];
+    if (extNode.type() == cv::FileNode::SEQ) {
+        for (const auto& ext : extNode) {
+            config.image_extensions.push_back(static_cast<std::string>(ext));
+        }
+    }
+
+    int readGrayScale = config.read_grayscale ? 1 : 0;
+    if (!fileStorage["read_grayscale"].empty()) {
+        fileStorage["read_grayscale"] >> readGrayScale;
+    }
+    config.read_grayscale = (readGrayScale != 0);
+
+    fileStorage["calib_rows"] >> config.calib_rows;
+    fileStorage["calib_cols"] >> config.calib_cols;
+    fileStorage["calib_centerDistance"] >> config.calib_centerDistance;
+
+    int logEnabled = config.log_enabled ? 1 : 0;
+    if (!fileStorage["log_enabled"].empty()) {
+        fileStorage["log_enabled"] >> logEnabled;
+    }
+    config.log_enabled = (logEnabled != 0);
+
+    if (!fileStorage["log_output_file"].empty()) {
+        fileStorage["log_output_file"] >> config.log_output_file;
+    }
+
+    int debugMode = config.debug_mode ? 1 : 0;
+    if (!fileStorage["debug_mode"].empty()) {
+        fileStorage["debug_mode"] >> debugMode;
+    }
+    config.debug_mode = (debugMode != 0);
+
+    int debugSaveImages = config.debug_save_images ? 1 : 0;
+    if (!fileStorage["debug_save_images"].empty()) {
+        fileStorage["debug_save_images"] >> debugSaveImages;
+    }
+    config.debug_save_images = (debugSaveImages != 0);
+
+    int debugShowWindows = config.debug_show_windows ? 1 : 0;
+    if (!fileStorage["debug_show_windows"].empty()) {
+        fileStorage["debug_show_windows"] >> debugShowWindows;
+    }
+    config.debug_show_windows = (debugShowWindows != 0);
+
+    if (!fileStorage["debug_output_dir"].empty()) {
+        fileStorage["debug_output_dir"] >> config.debug_output_dir;
+    }
+
+    fileStorage.release();
     return true;
 }
 
-std::vector<std::string> ConfigReader::getImageFiles(const std::string& dir) {
+std::vector<std::string> ConfigReader::getImageFiles(
+    const std::string& dir,
+    const std::vector<std::string>& extensions
+) {
     std::vector<std::string> files;
+
+    std::vector<std::string> normalizedExtensions = extensions;
+    for (auto& ext : normalizedExtensions) {
+        std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char ch) {
+            return static_cast<char>(std::tolower(ch));
+        });
+    }
+
+    if (normalizedExtensions.empty()) {
+        normalizedExtensions = {".jpg", ".jpeg", ".png", ".bmp", ".tiff"};
+    }
+
     try {
         for (const auto& entry : fs::directory_iterator(dir)) {
             if (entry.is_regular_file()) {
                 std::string ext = entry.path().extension().string();
-                // 支持常见图像格式
-                if (ext == ".jpg" || ext == ".jpeg" || ext == ".png" || ext == ".bmp" || ext == ".tiff") {
+                std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char ch) {
+                    return static_cast<char>(std::tolower(ch));
+                });
+
+                if (std::find(normalizedExtensions.begin(), normalizedExtensions.end(), ext) != normalizedExtensions.end()) {
                     files.push_back(entry.path().string());
                 }
             }

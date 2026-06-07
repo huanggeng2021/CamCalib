@@ -1,10 +1,13 @@
 #pragma once
 #include <opencv2/core.hpp>
 #include <opencv2/opencv.hpp>
+#include <filesystem>
+#include <fstream>
 #include <string>
 #include <vector>
 #include <opencv2/core/types.hpp>
 #include "imageProcess/CannyDetecter.h"
+#include "utils/Config.h"
 #include <Eigen/Dense>
 
 namespace camcalib {    
@@ -24,13 +27,15 @@ public:
     };
 
     // 加载图像入口
-    std::vector<cv::Mat> loadImages();
+    std::vector<cv::Mat> loadImages(const CaliConfig& config);
 
     // 标定入口 
     void runCalibrate();
        
 
 private:
+    bool log_enabled_ = false;
+    std::ofstream log_stream_;
 
     struct MarkerPair{
         int first = -1;
@@ -53,7 +58,7 @@ private:
     std::vector<std::vector<std::vector<cv::Point>>> runDetectEdge(const std::vector<cv::Mat>& images);
 
     // 亚像素边缘提取部分
-    std::vector<std::vector<std::vector<cv::Point>>> runDetectSubPixelEdge(const std::vector<cv::Mat>& images);
+    std::vector<std::vector<std::vector<cv::Point2f>>> runDetectSubPixelEdge(const std::vector<cv::Mat>& images);
 
 
 
@@ -115,6 +120,30 @@ private:
         const std::vector<Circle>& circles
     );
 
+    static cv::Mat buildBinaryImage(const cv::Mat& image);
+
+    static cv::Mat renderEdgeAndCircleCenters(
+        const cv::Mat& binary,
+        const std::vector<std::vector<cv::Point>>& contours,
+        const std::vector<Circle>& centerPoints
+    );
+
+    static cv::Mat renderSortedCircleCenters(
+        const cv::Mat& image,
+        const std::vector<Circle>& sortedCenterPoints
+    );
+
+    bool saveDebugImage(
+        const std::filesystem::path& outputPath,
+        const cv::Mat& image
+    );
+
+    void initializeLogger(const CaliConfig& config);
+    void shutdownLogger();
+    void logMessage(const std::string& level, const std::string& message);
+    void logInfo(const std::string& message);
+    void logError(const std::string& message);
+
     void showEdgeAndCircleCenters(
         const cv::Mat& binary, 
         const std::vector<std::vector<cv::Point>>& contours, 
@@ -132,7 +161,7 @@ private:
         const Eigen::Matrix3d& homography, 
         const std::string& windowName);
 
-    void drawCenterPoints(cv::Mat& image, const std::vector<Circle>& centerPoints);
+    static void drawCenterPoints(cv::Mat& image, const std::vector<Circle>& centerPoints);
 
 
 
