@@ -181,8 +181,8 @@ bool CalibrationPipeline::solveProjectorPhases(
 }
 
 bool CalibrationPipeline::runCameraCalibration(
-    const std::string& configPath,
-    DetectionResult& cameraDetection,
+    const std::string& configPath,                
+    DetectionResult& cameraDetection,     
     CalibrationResult& cameraCalibration
 ) const {
     CalibrationPipelineConfig config;

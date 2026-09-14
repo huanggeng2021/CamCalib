@@ -1,6 +1,7 @@
 #pragma once
 
 #include "core/CalibrationTypes.h"
+#include <opencv2/calib3d.hpp>
 
 namespace camcalib {
 

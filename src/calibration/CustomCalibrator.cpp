@@ -211,7 +211,7 @@ Eigen::Matrix<double, 6, 1> CustomCalibrator::makeV(
     return v;
 }
 
-// 通过homo矩阵计算内外参数初值
+// 通过homo矩阵计算内参初值
 cv::Mat CustomCalibrator::estimateIntrinsics(
     const std::vector<Eigen::Matrix3d>& homographies
 ) const{
@@ -231,8 +231,7 @@ cv::Mat CustomCalibrator::estimateIntrinsics(
         V.row(static_cast<Eigen::Index>(2 * k)) = makeV(H, 0, 1).transpose();
 
         // h1^T B h1 - h2^T B h2 = 0    ||r1|| = ||r2|| 单位向量
-        V.row(static_cast<Eigen::Index>(2 * k + 1)) = 
-        (makeV(H, 0, 0) - makeV(H, 1, 1)).transpose();
+        V.row(static_cast<Eigen::Index>(2 * k + 1)) = (makeV(H, 0, 0) - makeV(H, 1, 1)).transpose();
     }
 
     // 求 Vb = 0 的最小二乘齐次解
@@ -240,15 +239,423 @@ cv::Mat CustomCalibrator::estimateIntrinsics(
 
     Eigen::VectorXd b = svd.matrixV().col(5);    // b 只与内参有关
 
-    // 计算内参参数 
-    /*
-     * b = [B11, B12, B22, B13, B23, B33]^T
+    // step3: 由于vb = 0, 是齐次方程， b 与-b 等价， 需要确定正确符号
+
+    double B11 = b(0);
+    double B12 = b(1);
+    double B22 = b(2);
+    double B13 = b(3);
+    double B23 = b(4);
+    double B33 = b(5);
+
+    // B = K^(-T)K^(-1) 理论上为正定矩阵， 至少满足B11 > 0
+
+    if(B11 < 0.0){
+        b = -b;
+
+        double B11 = b(0);
+        double B12 = b(1);
+        double B22 = b(2);
+        double B13 = b(3);
+        double B23 = b(4);
+        double B33 = b(5);
+    }
+
+
+    // 计算内参
+    const double denominator = B11 * B22 - B12 * B12;
+    CV_Assert(std::abs(denominator) > 1e-12);
+    CV_Assert(std::abs(B11) > 1e-12);
+
+     /*
+     * 主点纵坐标 v0
      *
-     * 因为 Vb = 0 是齐次方程，所以 b 和 -b 等价。
-     * 尝试用简单条件判断是否需要翻转符号。
+     *      B12 B13 - B11 B23
+     * v0 = -------------------
+     *      B11 B22 - B12^2
      */
 
+    const double v0 = (B12 * B13 - B11 * B23) / denominator;
 
+    /*
+     * lambda
+     *
+     *          B13^2 + v0(B12 B13 - B11 B23)
+     * λ = B33 - --------------------------------
+     *                         B11
+     */
+
+    const double lambde = B33 - (B13 * B13 + v0 * (B12 * B13 - B11 * B23)) / B11;
+
+    /*
+     * fx = alpha
+     *
+     * alpha = sqrt(lambda / B11)
+     */
+
+    const double alpha = std::sqrt(lambde / B11);
+
+    /*
+     * fy = beta
+     *
+     *             lambda B11
+     * beta = sqrt(-------------)
+     *             B11 B22-B12²
+     */
+
+     const double beta = std::sqrt((lambde * B11 )/ denominator);
+
+    /*
+     * skew = gamma
+     *
+     * gamma = -B12 * alpha² * beta / lambda
+     */
+
+     const double gamma = -B12 * alpha * alpha * beta / lambde;
+
+     /*
+     * 主点横坐标 u0
+     *
+     *      gamma*v0   B13*alpha²
+     * u0 = -------- - -----------
+     *        beta        lambda
+     */
+
+     const double u0 = gamma * v0 /beta - B13 * alpha * alpha / lambde;
+
+
+    // ------------------------------------------------------------
+    // Step 5：构造相机内参矩阵 K
+    //
+    //     [ fx   skew   cx ]
+    // K = [ 0     fy    cy ]
+    //     [ 0      0     1 ]
+    // ------------------------------------------------------------
+
+    cv::Mat K = (cv::Mat_<double>(3,3)<<
+    alpha, gamma, u0,
+    0.0, beta, v0,
+    0.0, 0.0, 1.0);
+
+    return K;
+
+}
+
+
+void CustomCalibrator::estimateExtrinsics(
+    const cv::Mat& cameraMatrix,
+    const std::vector<cv::Mat>& homographies,
+    std::vector<cv::Mat>& rotationVectors,
+    std::vector<cv::Mat>& translationVectors
+    ) const{
+
+    CV_Assert(!cameraMatrix.empty());
+    CV_Assert(cameraMatrix.rows == 3 && cameraMatrix.cols == 3);
+    CV_Assert(!homographies.empty());
+
+    rotationVectors.clear();
+    translationVectors.clear();
+
+    rotationVectors.reserve(homographies.size());
+    translationVectors.reserve(homographies.size());
+
+    // 内参矩阵K
+    cv::Mat K;
+    cameraMatrix.convertTo(K, CV_64F);
+
+    cv::Mat kinv = K.inv(); //  求逆
+
+    for(size_t i = 0; i < homographies.size(); ++i){
+        
+        CV_Assert(homographies[i].rows == 3 && homographies[i].cols == 3);
+
+        cv::Mat H;
+        homographies[i].convertTo(H, CV_64F);
+
+        // --------------------------------------------------------
+        // H = lambda * K * [r1 r2 t]
+        //
+        // 因此：
+        //
+        // K^-1 H = lambda * [r1 r2 t]
+        // --------------------------------------------------------
+
+        cv::Mat h1 = H.col(0);
+        cv::Mat h2 = H.col(1);
+        cv::Mat h3 = H.col(2);
+
+        cv::Mat kinv_h1 = kinv * h1;
+        cv::Mat kinv_h2 = kinv * h2;
+        cv::Mat kinv_h3 = kinv * h3;
+
+        // --------------------------------------------------------
+        // 计算尺度因子
+        //
+        // 理论上：
+        //
+        // lambda = 1 / ||K^-1 h1||
+        //        = 1 / ||K^-1 h2||
+        //
+        // 实际有噪声，因此使用两者平均
+        // --------------------------------------------------------
+
+        const double norm1 = cv::norm(kinv_h1);
+        const double norm2 = cv::norm(kinv_h2);
+
+        CV_Assert(norm1 > 1e-12);
+        CV_Assert(norm2 > 1e-12);
+
+        const double lambda = 2.0 / (norm1 + norm2);
+
+        // --------------------------------------------------------
+        // 得到旋转矩阵前两列和平移向量
+        // --------------------------------------------------------
+
+        cv::Mat r1 = lambda * kinv_h1;
+        cv::Mat r2 = lambda * kinv_h2;
+        cv::Mat t = lambda * kinv_h3;
+
+        // r3 = r1  r2
+        cv::Mat r3 = r1.cross(r2);
+
+        // --------------------------------------------------------
+        // 构造初始旋转矩阵
+        //
+        // R_init = [r1 r2 r3]
+        //
+        // 由于单应矩阵存在噪声，
+        // 此时 R_init 通常不严格满足：
+        //
+        // R^T R = I
+        // det(R) = 1
+        // --------------------------------------------------------
+
+        cv::Mat Rinit(3, 3, CV_64F);
+        r1.copyTo(Rinit.col(0));
+        r2.copyTo(Rinit.col(1));
+        r3.copyTo(Rinit.col(2));
+
+        // --------------------------------------------------------
+        // 使用 SVD 将 Rinit 投影到最近的旋转矩阵
+        //
+        // Rinit = U * W * V^T
+        //
+        // 最近的正交矩阵：
+        //
+        // R = U * V^T
+        // --------------------------------------------------------
+
+        cv::SVD svd(Rinit, cv::SVD::FULL_UV);
+
+        cv::Mat U  = svd.u;
+        cv::Mat Vt = svd.vt;
+
+        cv::Mat R = U * Vt;
+
+        // --------------------------------------------------------
+        // 保证 R 属于 SO(3)
+        //
+        // 正确旋转矩阵要求：
+        //
+        // det(R) = +1
+        //
+        // 如果 det(R) = -1，
+        // 当前结果包含镜像反射，需要修正
+        // --------------------------------------------------------
+
+        if(cv::determinant(R) < 0.0){
+            U.col(2) *= -1.0;
+            R = U * Vt;
+        }
+
+        // --------------------------------------------------------
+        // 将旋转矩阵转换为 Rodrigues 旋转向量
+        // --------------------------------------------------------
+
+        cv::Mat rvec;
+        cv::Rodrigues(R, rvec);
+
+        rotationVectors.push_back(rvec.clone());
+        translationVectors.push_back(t.clone());
+    }
+
+    
+}
+
+
+  
+cv::Mat CustomCalibrator::initializeDistortion(
+    const std::vector<std::vector<cv::Point3f>>& objectPoints,
+    const std::vector<std::vector<cv::Point2d>>& imagePoints,
+    const cv::Mat& cameraMatrix,
+    const std::vector<cv::Mat>& rotationVectors,
+    const std::vector<cv::Mat>& translationVectors
+    ) const{
+
+    CV_Assert(!cameraMatrix.empty());
+    CV_Assert(cameraMatrix.rows == 3 && cameraMatrix.cols == 3);
+
+    CV_Assert(objectPoints.size() == imagePoints.size());
+    CV_Assert(objectPoints.size() == rotationVectors.size());
+    CV_Assert(objectPoints.size() == translationVectors.size());
+
+    cv::Mat K;
+    cameraMatrix.convertTo(K, CV_64F);
+
+    const double fx = K.at<double>(0, 0);
+    const double skew = K.at<double>(0, 1);
+    const double cx = K.at<double>(0, 2);
+
+    const double fy = K.at<double>(1, 1);
+    const double cy = K.at<double>(1, 2);
+
+    // ------------------------------------------------------------
+    // 统计总点数
+    //
+    // 每个角点提供两条方程：
+    // 一条来自 u
+    // 一条来自 v
+    // ------------------------------------------------------------
+
+    size_t totalPoints = 0;
+
+    for(const auto& pts : objectPoints){
+        totalPoints += pts.size();
+    }
+
+    CV_Assert(totalPoints > 0);
+
+    cv::Mat D (static_cast<int>(2 * totalPoints), 2, CV_64F);
+
+    cv::Mat d (static_cast<int>(2 * totalPoints), 1, CV_64F);
+
+    int row = 0;
+
+    // ------------------------------------------------------------
+    // 遍历每一个标定位姿
+    // ------------------------------------------------------------
+
+    for (size_t i = 0; i < objectPoints.size(); ++i){
+
+        CV_Assert(objectPoints[i].size() == imagePoints[i].size());
+
+        // 旋转向量 -> 旋转矩阵
+        cv::Mat R;
+        cv::Rodrigues(rotationVectors[i], R);
+
+        R.convertTo(R, CV_64F);
+
+        cv::Mat t;
+        translationVectors[i].convertTo(t, CV_64F);
+
+        CV_Assert(t.total() == 3);
+
+        if (t.rows == 1)
+        {
+            t = t.t();
+        }
+
+        // --------------------------------------------------------
+        // 遍历这一帧所有标定点
+        // --------------------------------------------------------
+
+        for(size_t j = 0; j < objectPoints[i].size(); ++j){
+
+            const cv::Point3f& Pw = objectPoints[i][j];
+            const cv::Point2d& observed = imagePoints[i][j];
+
+            cv::Mat P = (cv::Mat_<double>(3, 1) <<
+            static_cast<double>(Pw.x),
+            static_cast<double>(Pw.y),
+            static_cast<double>(Pw.z));
+
+            // ----------------------------------------------------
+            // 相机坐标：
+            //
+            // Pc = R * Pw + t
+            // ----------------------------------------------------
+
+            cv::Mat Pc = R * Pw + t;
+
+            const double Xc = Pc.at<double>(0, 0);
+            const double Yc = Pc.at<double>(1, 0);
+            const double Zc = Pc.at<double>(2, 0);
+
+            CV_Assert(std::abs(Zc) > 1e-12);
+
+            // ----------------------------------------------------
+            // 归一化相机坐标
+            // ----------------------------------------------------
+
+            const double x = Xc / Zc;
+            const double y = Yc / Zc;
+
+            const double r2 = x * x + y * y;
+            const double r4 = r2 * r2;
+
+            // ----------------------------------------------------
+            // 当前模型下的无畸变理论像素坐标
+            //
+            // u = fx*x + skew*y + cx
+            // v = fy*y + cy
+            // ----------------------------------------------------
+
+            const double u = fx * x + skew * y + cx;
+            const double v = fy * y + cy;
+
+            const double ud = observed.x;
+            const double vd = observed.y;
+
+            // ----------------------------------------------------
+            // 构造：
+            //
+            // (ud-u) = (u-cx) * (k1*r² + k2*r⁴)
+            //
+            // (vd-v) = (v-cy) * (k1*r² + k2*r⁴)
+            // ----------------------------------------------------
+
+            D.at<double>(row, 0) = (u - cx) * r2;
+            D.at<double>(row, 1) = (u - cx) * r4;
+
+            d.at<double>(row, 0) = ud - u;
+            
+            ++row;
+
+
+        }
+    }
+
+    // ------------------------------------------------------------
+    // 最小二乘求：
+    //
+    // D * k = d
+    //
+    // k = [k1, k2]^T
+    // ------------------------------------------------------------
+
+    cv::Mat k;
+
+    const bool success = cv::solve(D, d, K, cv::DECOMP_SVD);
+
+    CV_Assert(success);
+    CV_Assert(k.rows == 2 && k.cols == 1);
+
+    const double k1 = k.at<double>(0, 0);
+    const double k2 = k.at<double>(1, 0);
+
+    // ------------------------------------------------------------
+    // OpenCV 常用畸变参数格式：
+    //
+    // [k1, k2, p1, p2, k3]
+    //
+    // 当前这里只初始化 k1、k2
+    // 其余先设为 0
+    // ------------------------------------------------------------
+
+    cv::Mat distortionCoefficients =
+    (cv::Mat_<double>(1, 5) <<k1, k2, 0.0, 0.0, 0.0);
+
+    return distortionCoefficients;
 
 }
 
