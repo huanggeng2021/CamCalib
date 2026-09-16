@@ -9,6 +9,7 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 find_package(OpenCV REQUIRED COMPONENTS core imgcodecs imgproc highgui calib3d)
 find_package(Eigen3 REQUIRED)
+find_package(Ceres REQUIRED)
 
 file(GLOB_RECURSE CAMCALIB_SOURCES CONFIGURE_DEPENDS
     ${PROJECT_SOURCE_DIR}/src/*.cpp
@@ -26,6 +27,7 @@ target_link_libraries(camcalib
     PUBLIC
         ${OpenCV_LIBS}
         Eigen3::Eigen
+        ${CERES_LIBRARIES}
 )
 
 add_executable(camcalib_app

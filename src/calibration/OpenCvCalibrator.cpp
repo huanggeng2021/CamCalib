@@ -52,7 +52,8 @@ CalibrationResult OpenCvCalibrator::calibrate(
         result.cameraMatrix,
         result.distCoeffs,
         result.rotationVectors,
-        result.translationVectors
+        result.translationVectors,
+        cv::CALIB_FIX_K3
     );
     result.converged = !result.cameraMatrix.empty() && !result.distCoeffs.empty();
     return result;

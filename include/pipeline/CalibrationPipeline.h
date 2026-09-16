@@ -2,6 +2,7 @@
 
 #include "core/CalibrationTypes.h"
 #include "dataset/ProjectorDatasetLoader.h"
+#include "calibration/CustomCalibrator.h"
 
 #include <array>
 #include <string>

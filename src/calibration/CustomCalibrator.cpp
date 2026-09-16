@@ -1,8 +1,15 @@
 
 
 #include "calibration/CustomCalibrator.h"
+#include <ceres/ceres.h>
+#include <ceres/rotation.h>
 
 namespace camcalib{
+
+CustomCalibrator::CustomCalibrator(BoardConfig boardConfig)
+    : boardConfig_(std::move(boardConfig))
+{
+}
 
 
 // 对点集进行归一化
@@ -184,7 +191,6 @@ Eigen::Matrix3d CustomCalibrator::estimateHomography(
     if(std::abs(H(2, 2)) > 1e-12){   
         H /= H(2,2);
     }else{
-
         const double norm = H.norm(); // 防止出现H(2, 2) = 0的情况
     }
 
@@ -201,7 +207,7 @@ Eigen::Matrix<double, 6, 1> CustomCalibrator::makeV(
     Eigen::Matrix<double, 6, 1> v;
 
     v << H(0, i) * H(0, j),
-         H(0, i) * H(1, j) + H(1, j) * H(0, j),
+         H(0, i) * H(1, j) + H(1, i) * H(0, j),
          H(1, i) * H(1, j),
          H(2, i) * H(0, j) + H(0, i) * H(2, j),
          H(2, i) * H(1, j) + H(1, i) * H(2, j),
@@ -253,19 +259,31 @@ cv::Mat CustomCalibrator::estimateIntrinsics(
     if(B11 < 0.0){
         b = -b;
 
-        double B11 = b(0);
-        double B12 = b(1);
-        double B22 = b(2);
-        double B13 = b(3);
-        double B23 = b(4);
-        double B33 = b(5);
+        B11 = b(0);
+        B12 = b(1);
+        B22 = b(2);
+        B13 = b(3);
+        B23 = b(4);
+        B33 = b(5);
     }
+
+    // b 是齐次解，其整体尺度任意。典型相机下 B11、B22 约为
+    // 1 / f^2，直接用固定的 1e-12 判断 denominator 会误判。
+    const double bScale = b.cwiseAbs().maxCoeff();
+    CV_Assert(bScale > 0.0);
+    CV_Assert(std::abs(B11) > std::numeric_limits<double>::epsilon() * bScale);
+
+    B12 /= B11;
+    B22 /= B11;
+    B13 /= B11;
+    B23 /= B11;
+    B33 /= B11;
+    B11 = 1.0;
 
 
     // 计算内参
     const double denominator = B11 * B22 - B12 * B12;
-    CV_Assert(std::abs(denominator) > 1e-12);
-    CV_Assert(std::abs(B11) > 1e-12);
+    CV_Assert(denominator > std::numeric_limits<double>::epsilon());
 
      /*
      * 主点纵坐标 v0
@@ -575,7 +593,7 @@ cv::Mat CustomCalibrator::initializeDistortion(
             // Pc = R * Pw + t
             // ----------------------------------------------------
 
-            cv::Mat Pc = R * Pw + t;
+            cv::Mat Pc = R * P + t;
 
             const double Xc = Pc.at<double>(0, 0);
             const double Yc = Pc.at<double>(1, 0);
@@ -618,9 +636,13 @@ cv::Mat CustomCalibrator::initializeDistortion(
             D.at<double>(row, 1) = (u - cx) * r4;
 
             d.at<double>(row, 0) = ud - u;
-            
             ++row;
 
+            D.at<double>(row, 0) = (v - cy) * r2;
+            D.at<double>(row, 1) = (v - cy) * r4;
+
+            d.at<double>(row, 0) = vd - v;
+            ++row;
 
         }
     }
@@ -635,7 +657,7 @@ cv::Mat CustomCalibrator::initializeDistortion(
 
     cv::Mat k;
 
-    const bool success = cv::solve(D, d, K, cv::DECOMP_SVD);
+    const bool success = cv::solve(D, d, k, cv::DECOMP_SVD);
 
     CV_Assert(success);
     CV_Assert(k.rows == 2 && k.cols == 1);
@@ -660,6 +682,404 @@ cv::Mat CustomCalibrator::initializeDistortion(
 }
 
 
+// 优化使用结构体
+
+struct ReprojectionError{
+
+    ReprojectionError(
+        const cv::Point3f& objectPoint,
+        const cv::Point2d& imagePoint
+    ) : objectPoint_(objectPoint), imagePoint_(imagePoint)
+    {
+
+    }
+
+
+    template<typename T>
+    bool operator()(
+        const T* const intrinsics,   // [fx, fy, cx, cy]
+        const T* const distortion,   // [k1, k2, p1, p2]，第一阶段固定 k3 = 0
+        const T* const pose,         // [rx, ry, rz, tx, ty, tz]
+        T* residuals
+    )const {
+
+        // --------------------------------------------------------
+        // 1. 读取内参
+        // --------------------------------------------------------
+        const T& fx = intrinsics[0];
+        const T& fy = intrinsics[1];
+        const T& cx = intrinsics[2];
+        const T& cy = intrinsics[3];
+
+        // --------------------------------------------------------
+        // 2. 读取畸变参数
+        // --------------------------------------------------------
+        const T& k1 = distortion[0];
+        const T& k2 = distortion[1];
+        const T& p1 = distortion[2];
+        const T& p2 = distortion[3];
+
+        // --------------------------------------------------------
+        // 3. 世界坐标 / 标定板坐标
+        // --------------------------------------------------------
+        T Pw[3];
+
+        Pw[0] = T(objectPoint_.x);
+        Pw[1] = T(objectPoint_.y);
+        Pw[2] = T(objectPoint_.z);
+
+        // --------------------------------------------------------
+        // 4. 使用 angle-axis 旋转
+        //
+        // Pc = R * Pw + t
+        //
+        // pose[0:3] = Rodrigues / angle-axis
+        // pose[3:6] = translation
+        // --------------------------------------------------------
+        T Pc[3];
+
+        ceres::AngleAxisRotatePoint(pose, Pw, Pc);
+
+        Pc[0] += pose[3];
+        Pc[1] += pose[4];
+        Pc[2] += pose[5];
+
+        // --------------------------------------------------------
+        // 5. 相机归一化坐标
+        //
+        // x = Xc / Zc
+        // y = Yc / Zc
+        // --------------------------------------------------------
+        const T x = Pc[0] / Pc[2];
+        const T y = Pc[1] / Pc[2];
+
+        // --------------------------------------------------------
+        // 6. 畸变模型
+        // --------------------------------------------------------
+        const T r2 = x * x + y * y;
+        const T r4 = r2 * r2;
+        // 径向畸变比例
+        const T radial = T(1.0) + k1 * r2 + k2 * r4;
+
+        // 完整 Brown-Conrady 模型
+        const T xDistorted = x * radial + T(2.0) * p1 * x * y + p2 * (r2 + T(2.0) * x * x);
+
+        const T yDistorted = y * radial + p1 * (r2 + T(2.0) * y * y) + T(2.0) * p2 * x * y;
+
+        // --------------------------------------------------------
+        // 7. 从归一化平面投影到像素平面
+        //
+        // u = fx * xd + cx
+        // v = fy * yd + cy
+        // --------------------------------------------------------
+        const T predictedU = fx * xDistorted + cx;
+
+        const T predictedV = fy * yDistorted + cy;
+
+        // --------------------------------------------------------
+        // 8. 重投影误差
+        // --------------------------------------------------------
+        residuals[0] = predictedU - T(imagePoint_.x);
+        residuals[1] = predictedV - T(imagePoint_.y);
+        return true;
+
+    }
+
+    // 每个观测对应：
+    //
+    // 2 residuals
+    // 4 intrinsics
+    // 4 distortion parameters
+    // 6 pose parameters
+    static ceres::CostFunction* Create(
+        const cv::Point3f& objectPoint,
+        const cv::Point2d& imagePoint){
+
+        return new ceres::AutoDiffCostFunction<ReprojectionError, 2, 4, 4, 6>(
+            new ReprojectionError(objectPoint, imagePoint)
+        );
+    }
+
+private:
+
+    cv::Point3f objectPoint_;
+    cv::Point2d imagePoint_;
+};
+
+
+
+void CustomCalibrator::bundleAdjustment(
+    const std::vector<std::vector<cv::Point3f>>& objectPoints,
+    const std::vector<std::vector<cv::Point2d>>& imagePoints,
+    CalibrationResult& result
+) const{
+
+    CV_Assert(!result.cameraMatrix.empty());
+    CV_Assert(objectPoints.size() == imagePoints.size());
+    CV_Assert(objectPoints.size() == result.rotationVectors.size());
+    CV_Assert(objectPoints.size() == result.translationVectors.size());
+
+    const size_t numViews = objectPoints.size();
+    // step1: 从 result 中提取 K、dist、rvec、tvec 初值
+
+    // 内参
+    cv::Mat K;
+    result.cameraMatrix.convertTo(K, CV_64F);
+
+    std::array<double, 4> intrinsics = {
+        K.at<double>(0, 0), // fx
+        K.at<double>(1, 1), // fy
+        K.at<double>(0, 2), // cx
+        K.at<double>(1, 2)  // cy
+    };
+
+    // 畸变系数初值
+    std::array<double, 4> distortion = {0.0, 0.0, 0.0, 0.0};
+
+    if(!result.distCoeffs.empty()){
+        cv::Mat dist;
+        result.distCoeffs.reshape(1, 1).convertTo(dist, CV_64F);
+
+        const size_t count = dist.total();
+
+        if(count > 0) distortion[0] = dist.at<double>(0, 0);
+        if(count > 1) distortion[1] = dist.at<double>(0, 1);
+        if(count > 2) distortion[2] = dist.at<double>(0, 2);
+        if(count > 3) distortion[3] = dist.at<double>(0, 3);
+    }
+
+    // 每帧位姿
+    std::vector<std::array<double, 6>> poses(numViews);
+
+    for(size_t i = 0; i < numViews; ++i){
+        cv::Mat rvec;
+        cv::Mat tvec;
+
+        result.rotationVectors[i].reshape(1, 3).convertTo(rvec, CV_64F);
+
+        result.translationVectors[i].reshape(1, 3).convertTo(tvec, CV_64F);
+
+        poses[i][0] = rvec.at<double>(0, 0);
+        poses[i][1] = rvec.at<double>(1, 0);
+        poses[i][2] = rvec.at<double>(2, 0);
+
+        poses[i][3] = tvec.at<double>(0, 0);
+        poses[i][4] = tvec.at<double>(1, 0);
+        poses[i][5] = tvec.at<double>(2, 0);
+    }
+
+    // 2. 将所有参数打包成优化变量
+    ceres::Problem problem;
+
+    size_t totalObservations = 0;
+
+    for(size_t i = 0; i < numViews; ++i){
+
+        CV_Assert(objectPoints[i].size() == imagePoints[i].size());
+        totalObservations += objectPoints[i].size();
+
+        for(size_t j = 0; j < objectPoints[i].size(); ++j){
+
+            ceres::CostFunction* costFunction = ReprojectionError::Create(
+                objectPoints[i][j], imagePoints[i][j]
+            );
+
+            problem.AddResidualBlock(
+                costFunction, nullptr, intrinsics.data(),
+                distortion.data(), poses[i].data()
+            );
+        }
+    }
+
+    // 求解器参数设置
+    ceres::Solver::Options options;
+
+    options.linear_solver_type = ceres::DENSE_QR;
+    options.max_num_iterations = 100;
+
+    options.function_tolerance = 1e-12;
+    options.gradient_tolerance = 1e-12;
+    options.parameter_tolerance = 1e-12;
+    options.minimizer_progress_to_stdout = true;
+
+    // 开始优化
+    ceres::Solver::Summary summary;
+
+    ceres::Solve(options, &problem, &summary);
+    std::cout << summary.BriefReport() << std::endl;
+
+    // 保存求解器信息
+    result.solverName = "Ceres Bundle Adjustment";
+    result.converged = summary.IsSolutionUsable();
+
+    if(!result.converged){
+        result.globalRmse = std::numeric_limits<double>::infinity();
+        return;
+    }
+
+
+    // 保存优化后的内参
+    result.cameraMatrix =
+        (cv::Mat_<double>(3, 3) <<
+            intrinsics[0], 0.0,           intrinsics[2],
+            0.0,           intrinsics[1], intrinsics[3],
+            0.0,           0.0,           1.0
+        );
+
+    // 保存优化后的畸变
+    result.distCoeffs =
+        (cv::Mat_<double>(1, 5) <<
+            distortion[0],
+            distortion[1],
+            distortion[2],
+            distortion[3],
+            0.0
+        );
+
+    // 保存优化后的每帧外参
+    for (size_t i = 0; i < numViews; ++i)
+    {
+        result.rotationVectors[i] =
+            (cv::Mat_<double>(3, 1) <<poses[i][0], poses[i][1], poses[i][2]);
+
+        result.translationVectors[i] =
+            (cv::Mat_<double>(3, 1) <<poses[i][3], poses[i][4], poses[i][5]);
+    }
+
+    // ============================================================
+    // 11. 计算最终 global RMSE
+    //
+    // Ceres:
+    // final_cost = 1/2 * sum(residual^2)
+    //
+    // 每个角点有 2 个 residual：
+    // du, dv
+    //
+    // 我们通常定义每个“二维点”的 RMSE：
+    //
+    // sqrt(sum(du² + dv²) / Npoints)
+    //
+    // 所以：
+    //
+    // sum(residual²) = 2 * final_cost
+    // ============================================================
+
+    if (totalObservations > 0)
+    {
+        result.globalRmse =
+            std::sqrt(
+                2.0 * summary.final_cost /
+                static_cast<double>(totalObservations)
+            );
+    }
+    else
+    {
+        result.globalRmse =
+            std::numeric_limits<double>::infinity();
+
+        result.converged = false;
+    }
 
 }
 
+
+CalibrationResult CustomCalibrator::calibrate(
+    const CalibrationDataset& dataset,
+    const DetectionResult& detetion) const{
+
+    CalibrationResult result;
+    result.solverName = "Custom Zhang Calibration";
+
+    if(dataset.empty()){
+        return result;
+    }
+
+    std::vector<std::vector<cv::Point3f>> objectPoints;
+    std::vector<std::vector<cv::Point2d>> imagePoints;
+    objectPoints.reserve(detetion.views.size());
+    imagePoints.reserve(detetion.views.size());
+
+    for(const ViewObservation& view : detetion.views){
+        if(!view.valid ||
+           view.objectPoints.size() < 4 ||
+           view.objectPoints.size() != view.imagePoints.size()){
+            continue;
+        }
+
+        objectPoints.push_back(view.objectPoints);
+        imagePoints.push_back(view.imagePoints);
+    }
+
+    // Zhang 平面标定至少需要三个不同位姿。
+    if(objectPoints.size() < 3){
+        return result;
+    }
+
+    const std::vector<Eigen::Matrix3d> eigenHomographies =
+        estimateAllPoseHomography(objectPoints, imagePoints);
+
+    if(eigenHomographies.size() != objectPoints.size()){
+        return result;
+    }
+
+    result.cameraMatrix = estimateIntrinsics(eigenHomographies);
+    if(result.cameraMatrix.empty()){
+        return result;
+    }
+
+    // 与 OpenCV 普通针孔模型保持一致：skew 固定为 0，主点从图像中心开始。
+    result.cameraMatrix.at<double>(0, 1) = 0.0;
+    result.cameraMatrix.at<double>(0, 2) =
+        0.5 * static_cast<double>(dataset.imageSize.width - 1);
+    result.cameraMatrix.at<double>(1, 2) =
+        0.5 * static_cast<double>(dataset.imageSize.height - 1);
+
+    std::vector<cv::Mat> homographies;
+    homographies.reserve(eigenHomographies.size());
+    for(const Eigen::Matrix3d& eigenHomography : eigenHomographies){
+        cv::Mat homography(3, 3, CV_64F);
+        for(int row = 0; row < 3; ++row){
+            for(int col = 0; col < 3; ++col){
+                homography.at<double>(row, col) = eigenHomography(row, col);
+            }
+        }
+        homographies.push_back(std::move(homography));
+    }
+
+    estimateExtrinsics(
+        result.cameraMatrix,
+        homographies,
+        result.rotationVectors,
+        result.translationVectors
+    );
+
+    result.distCoeffs = initializeDistortion(
+        objectPoints,
+        imagePoints,
+        result.cameraMatrix,
+        result.rotationVectors,
+        result.translationVectors
+    );
+
+    // 第一轮比较固定 k3，与 OpenCV CALIB_FIX_K3 使用相同畸变自由度。
+    result.distCoeffs.at<double>(0, 4) = 0.0;
+
+    // 在联合 BA 前，使用当前内参与畸变逐幅细化外参初值。
+    for(size_t i = 0; i < objectPoints.size(); ++i){
+        cv::solvePnP(
+            objectPoints[i],
+            imagePoints[i],
+            result.cameraMatrix,
+            result.distCoeffs,
+            result.rotationVectors[i],
+            result.translationVectors[i],
+            true,
+            cv::SOLVEPNP_ITERATIVE
+        );
+    }
+
+    bundleAdjustment(objectPoints, imagePoints, result);
+    return result;
+}
+
+}
