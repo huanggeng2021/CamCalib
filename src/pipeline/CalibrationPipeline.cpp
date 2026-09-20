@@ -7,10 +7,12 @@
 #include "detection/CircleGridDetector.h"
 #include "evaluation/ReprojectionEvaluator.h"
 #include "imageProcess/ThreeFrequencyFourStepPhase.h"
+#include "imageProcess/ThreeFrequencyFourStepPhaseCuda.h"
 #include "projector/ProjectorPointMatcher.h"
 #include "utils/Config.h"
 #include "utils/Logger.h"
 #include "utils/ResultIO.h"
+
 
 #include <algorithm>
 #include <cmath>
@@ -149,27 +151,25 @@ bool CalibrationPipeline::solveProjectorPhases(
 
     for(ProjectorPoseData& pose : poses){
         try{
-            pose.xAbsolutePhase = ThreeFrequencyFourStepPhase::solve(
-                pose.xImages,
-                frequencies
-            ).unwrappedPhase;
+            //pose.xAbsolutePhase = ThreeFrequencyFourStepPhase::solve(
+            //    pose.xImages, frequencies ).unwrappedPhase;
+
             pose.yAbsolutePhase = ThreeFrequencyFourStepPhase::solve(
-                pose.yImages,
-                frequencies
-            ).unwrappedPhase;
+                pose.yImages, frequencies).unwrappedPhase;
+
+            pose.xAbsolutePhase = ThreeFrequencyFourStepPhaseCuda::solveCuda(
+                pose.xImages,frequencies).unwrappedPhase;
+
         }catch(const cv::Exception& exception){
             pose.xAbsolutePhase.release();
             pose.yAbsolutePhase.release();
-            utils::logError(
-                "Phase solving failed for " + pose.poseName +
-                ": " + exception.what()
-            );
+            utils::logError("Phase solving failed for " + pose.poseName +": " + exception.what());
             continue;
         }
 
-        if(pose.xAbsolutePhase.empty() ||
-           pose.yAbsolutePhase.empty() ||
+        if(pose.xAbsolutePhase.empty() || pose.yAbsolutePhase.empty() ||
            pose.xAbsolutePhase.size() != pose.yAbsolutePhase.size()){
+
             pose.xAbsolutePhase.release();
             pose.yAbsolutePhase.release();
             utils::logError("Invalid absolute phase result for " + pose.poseName);

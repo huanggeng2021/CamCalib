@@ -82,10 +82,10 @@ cv::Mat ThreeFrequencyFourStepPhase::unwrapHighestFrequency(
     checkSameSizeAndType(syntheticPhase123, highestWrappedPhase);
     CV_Assert(frequency1 > frequency2 && frequency2 > frequency3);
 
-    const float referenceLength = static_cast<float>(highestWrappedPhase.cols);
-    const float period1 = referenceLength / frequency1;
-    const float period2 = referenceLength / frequency2;
-    const float period3 = referenceLength / frequency3;
+    //const float referenceLength = static_cast<float>(highestWrappedPhase.cols);
+    const float period1 = 1.0 / frequency1;
+    const float period2 = 1.0 / frequency2;
+    const float period3 = 1.0 / frequency3;
     const float period12 = period1 * period2 / (period2 - period1);
     const float period23 = period2 * period3 / (period3 - period2);
     const float period123 = period12 * period23 / (period23 - period12);
@@ -99,7 +99,7 @@ cv::Mat ThreeFrequencyFourStepPhase::unwrapHighestFrequency(
             const float phase23 = syntheticPhase23.at<float>(row, col);
             unwrappedPhase23.at<float>(row, col) =
                 phase23 + kTwoPi * static_cast<float>(std::round(
-                    (phase123 * period123 / period23 - phase23 + 0.2f) / kTwoPi
+                    (phase123 * period123 / period23 - phase23 ) / kTwoPi
                 ));
         }
     }
@@ -110,7 +110,7 @@ cv::Mat ThreeFrequencyFourStepPhase::unwrapHighestFrequency(
             const float phase23 = unwrappedPhase23.at<float>(row, col);
             unwrappedPhase1.at<float>(row, col) =
                 phase1 + kTwoPi * static_cast<float>(std::round(
-                    (phase23 * period23 / period1 - phase1 + 0.2f) / kTwoPi
+                    (phase23 * period23 / period1 - phase1) / kTwoPi
                 ));
         }
     }

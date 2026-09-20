@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.16)
 
-project(CamCalib LANGUAGES CXX)
+project(CamCalib LANGUAGES CXX CUDA)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -13,6 +13,7 @@ find_package(Ceres REQUIRED)
 
 file(GLOB_RECURSE CAMCALIB_SOURCES CONFIGURE_DEPENDS
     ${PROJECT_SOURCE_DIR}/src/*.cpp
+    ${PROJECT_SOURCE_DIR}/src/*.cu
 )
 
 add_library(camcalib ${CAMCALIB_SOURCES})
