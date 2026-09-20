@@ -35,6 +35,7 @@ struct DetectorConfig {
 /** @brief 伪相机法投影仪标定配置。 */
 struct ProjectorConfig {
     bool enabled = true;  ///< 是否执行投影仪标定。
+    bool useCuda = false;  ///< 是否使用 CUDA 计算绝对相位。
     std::string method = "pseudo_camera";  ///< 投影仪标定方法名称。
     std::string calibrationDataDirectory;  ///< 投影仪多位姿相位图根目录。
     std::array<float, 3> phaseFrequencies = {64.0f, 16.0f, 4.0f};  ///< 从高到低的三频条纹频率。

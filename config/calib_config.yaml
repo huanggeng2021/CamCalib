@@ -23,6 +23,7 @@ detector:
 
 projector:                  # 投影仪配置
   enabled: 1
+  use_cuda: 1               # 1 使用 CUDA，0 使用 CPU
   method: "pseudo_camera"
   calibration_data_directory: "data/projector"
   phase_frequencies: [ 70.0, 64.0, 59.0 ]

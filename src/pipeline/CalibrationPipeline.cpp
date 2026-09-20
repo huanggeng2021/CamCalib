@@ -145,20 +145,24 @@ DetectionResult CalibrationPipeline::buildProjectorDetection(
 bool CalibrationPipeline::solveProjectorPhases(
     std::vector<ProjectorPoseData>& poses,
     const std::array<float, 3>& frequencies,
-    int minValidViews
+    int minValidViews,
+    bool useCuda
 ) const {
     int validViewCount = 0;
 
     for(ProjectorPoseData& pose : poses){
         try{
-            //pose.xAbsolutePhase = ThreeFrequencyFourStepPhase::solve(
-            //    pose.xImages, frequencies ).unwrappedPhase;
-
-            pose.yAbsolutePhase = ThreeFrequencyFourStepPhase::solve(
-                pose.yImages, frequencies).unwrappedPhase;
-
-            pose.xAbsolutePhase = ThreeFrequencyFourStepPhaseCuda::solveCuda(
-                pose.xImages,frequencies).unwrappedPhase;
+            if(useCuda){
+                pose.xAbsolutePhase = ThreeFrequencyFourStepPhaseCuda::solveCuda(
+                    pose.xImages, frequencies).unwrappedPhase;
+                pose.yAbsolutePhase = ThreeFrequencyFourStepPhaseCuda::solveCuda(
+                    pose.yImages, frequencies).unwrappedPhase;
+            }else{
+                pose.xAbsolutePhase = ThreeFrequencyFourStepPhase::solve(
+                    pose.xImages, frequencies).unwrappedPhase;
+                pose.yAbsolutePhase = ThreeFrequencyFourStepPhase::solve(
+                    pose.yImages, frequencies).unwrappedPhase;
+            }
 
         }catch(const cv::Exception& exception){
             pose.xAbsolutePhase.release();
@@ -299,7 +303,8 @@ bool CalibrationPipeline::runProjectorCalibration(
     if(!solveProjectorPhases(
            projectorPoses,
            config.projector.phaseFrequencies,
-           config.projector.minValidViews)){
+           config.projector.minValidViews,
+           config.projector.useCuda)){
         utils::logError("Too few valid projector phase results.");
         utils::shutdownLogger();
         return false;

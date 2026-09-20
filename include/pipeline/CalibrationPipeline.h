@@ -67,7 +67,8 @@ private:
     bool solveProjectorPhases(
         std::vector<ProjectorPoseData>& poses,
         const std::array<float, 3>& frequencies,
-        int minValidViews
+        int minValidViews,
+        bool useCuda
     ) const;
 
     /** @brief 执行相机或投影仪共用的标定和重投影评价。 */

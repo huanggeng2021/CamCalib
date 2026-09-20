@@ -101,6 +101,7 @@ bool ConfigReader::readConfig(
 
     const cv::FileNode projectorNode = fileStorage["projector"];
     readBool(projectorNode["enabled"], config.projector.enabled);
+    readBool(projectorNode["use_cuda"], config.projector.useCuda);
     if (!projectorNode["method"].empty()) {
         projectorNode["method"] >> config.projector.method;
     }
