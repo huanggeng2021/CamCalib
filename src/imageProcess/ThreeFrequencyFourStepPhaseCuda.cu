@@ -17,6 +17,7 @@ void checkCudaError(cudaError_t error, const char* message){
 }
 
 // 计算包裹相位核函数
+// static 修饰符的作用是 该核函数只在当前cu文件中有效
 static __global__ void calculateWrappedPhaseKernel(
     const float* image0,
     const float* image1,
@@ -34,9 +35,9 @@ static __global__ void calculateWrappedPhaseKernel(
         return;
     }
 
-    const int index = row * col + col;   //  像素再图像指针中的下标
+    const int index = row * cols + col;   //  像素再图像指针中的下标
 
-    const float numerator = image3[index] - image0[index];
+    const float numerator = image3[index] - image1[index];
     const float denominator = image0[index] - image2[index];
 
     wrappedPhase[index] = atan2f(numerator, denominator); 
@@ -67,6 +68,33 @@ static __global__ void calculateSyntheticPhaseKernel(
     }
 
     syntheticPhase[index] = phaseDifference;
+
+}
+
+
+static __global__ void unwrapPhaseKernel(
+    const float* coarseUnwrappedPhase,
+    const float* wrappedPhase,
+    float coarsePeriod,
+    float targetPeriod,
+    int cols,
+    int rows,
+    float* unwrappedPhase
+) {
+
+    const float kTwoPi = 6.28318530717958647692f;
+
+    const int col = blockIdx.x * blockDim.x + threadIdx.x;
+    const int row = blockIdx.y * blockDim.y + threadIdx.y;
+
+    if(col >= cols || row >= rows){
+        return;
+    }
+
+    const int index = row * cols + col;
+
+    unwrappedPhase[index] = wrappedPhase[index] + kTwoPi * 
+        roundf((coarseUnwrappedPhase[index] * coarsePeriod / targetPeriod - wrappedPhase[index] ) / kTwoPi);
 
 }
 
@@ -181,7 +209,7 @@ cv::Mat ThreeFrequencyFourStepPhaseCuda::calculateWrappedPhase(
 }
 
 
-cv::Mat calculateSyntheticPhaseCuda(
+cv::Mat ThreeFrequencyFourStepPhaseCuda::calculateSyntheticPhaseCuda(
     const cv::Mat& higherFrequencyPhase,
     const cv::Mat& lowerFrequencyPhase
     ){
@@ -253,8 +281,106 @@ cv::Mat calculateSyntheticPhaseCuda(
     return syntheticPhaseHost;
 }
 
+cv::Mat ThreeFrequencyFourStepPhaseCuda::unwrapHighestFrequencyCuda(
+    const cv::Mat& syntheticPhase123,
+    const cv::Mat& syntheticPhase23,
+    const cv::Mat& highestWrappedPhase,
+    float frequency1,
+    float frequency2,
+    float frequency3
+){
+
+    const float period1 = 1.0 / frequency1;
+    const float period2 = 1.0 / frequency2;
+    const float period3 = 1.0 / frequency3;
+    const float period12 = period1 * period2 / (period2 - period1);
+    const float period23 = period2 * period3 / (period3 - period2);
+    const float period123 = period12 * period23 / (period23 - period12);
+
+  
+
+    // 开辟device内存
+    const int rows = syntheticPhase123.rows;
+    const int cols = syntheticPhase123.cols;
+    // 计算字节数
+    size_t byteSize = static_cast<size_t>(rows) * static_cast<size_t>(cols) * sizeof(float);
+
+    float* syntheticPhase123Device = nullptr;
+    float* syntheticPhase23Device = nullptr;
+    float* highestWrappedPhaseDevice = nullptr;
+
+    float* unwrappedPhase23Device = nullptr;
+    float* unwrappedPhase1Device = nullptr;
+
+    checkCudaError(cudaMalloc(&syntheticPhase123Device, byteSize), 
+        "syntheticPhase123Device malloc failed");
+    checkCudaError(cudaMalloc(&syntheticPhase23Device, byteSize), 
+        "syntheticPhase23Device malloc failed");
+    checkCudaError(cudaMalloc(&highestWrappedPhaseDevice, byteSize), 
+        "highestWrappedPhaseDevice malloc failed");
+
+    checkCudaError(cudaMalloc(&unwrappedPhase23Device, byteSize), 
+        "unwrappedPhase23Device malloc failed");
+    checkCudaError(cudaMalloc(&unwrappedPhase1Device, byteSize), 
+        "unwrappedPhase1Device malloc failed");
+
+    // 拷贝 host to device
+    
+    checkCudaError(cudaMemcpy(syntheticPhase123Device, syntheticPhase123.ptr<float>(), byteSize, cudaMemcpyHostToDevice),
+        "syntheticPhase123Device cpoy failed");
+    checkCudaError(cudaMemcpy(syntheticPhase23Device, syntheticPhase23.ptr<float>(), byteSize, cudaMemcpyHostToDevice),
+        "syntheticPhase23Device cpoy failed");
+    checkCudaError(cudaMemcpy(highestWrappedPhaseDevice, highestWrappedPhase.ptr<float>(), byteSize, cudaMemcpyHostToDevice),
+        "highestWrappedPhaseDevice cpoy failed");
+    
+    // 配置核函数
+    dim3 block(16, 16);
+
+    dim3 grid(
+        (cols + block.x - 1) / block.x ,
+        (rows + block.y - 1) /  block.y
+    );
+
+    unwrapPhaseKernel<<<grid, block>>>(
+        syntheticPhase123Device,
+        syntheticPhase23Device,
+        period123, 
+        period23,
+        cols, rows,
+        unwrappedPhase23Device
+    );
+
+    unwrapPhaseKernel<<<grid, block>>>(
+        unwrappedPhase23Device,
+        highestWrappedPhaseDevice,
+        period23, 
+        period1,
+        cols, rows,
+        unwrappedPhase1Device
+    );
+
+    // 等待同步
+    checkCudaError(
+        cudaDeviceSynchronize(),
+        "calculateWrappedPhaseKernel execution failed"
+    );
+
+    // device to host 
+    cv::Mat unwrappedPhase1(syntheticPhase123.size(), CV_32FC1);  // 最终绝对相位
+    checkCudaError(cudaMemcpy(unwrappedPhase1.ptr<float>(), unwrappedPhase1Device, byteSize, cudaMemcpyDeviceToHost), 
+        "unwrapPhaseKernel execution failed");
 
 
+    // 释放内存
+    cudaFree(syntheticPhase123Device);
+    cudaFree(syntheticPhase23Device);
+    cudaFree(highestWrappedPhaseDevice);
+
+    cudaFree(unwrappedPhase23Device);
+    cudaFree(unwrappedPhase1Device);
+
+    return unwrappedPhase1;
+}
 
 
 ThreeFrequencyPhaseResult ThreeFrequencyFourStepPhaseCuda::solveCuda(
@@ -263,8 +389,15 @@ ThreeFrequencyPhaseResult ThreeFrequencyFourStepPhaseCuda::solveCuda(
 ){
 
     ThreeFrequencyPhaseResult result;
-    for(int index = 0; index < 3; ++index){
-        result.wrappedPhases[index] = calculateWrappedPhase(images[index], images[index+1], images[index+2], images[index+3]);
+    for (int index = 0; index < 3; ++index) {
+        const int offset = index * 4;
+
+        result.wrappedPhases[index] = calculateWrappedPhase(
+            images[offset],
+            images[offset + 1],
+            images[offset + 2],
+            images[offset + 3]
+        );
     }
 
     // 计算合成相位
@@ -280,6 +413,16 @@ ThreeFrequencyPhaseResult ThreeFrequencyFourStepPhaseCuda::solveCuda(
     result.syntheticPhase123 = calculateSyntheticPhaseCuda(
         syntheticPhase12,
         result.syntheticPhase23
+    );
+
+    // 展开最高频率相位
+    result.unwrappedPhase = unwrapHighestFrequencyCuda(
+        result.syntheticPhase123,
+        result.syntheticPhase23,
+        result.wrappedPhases[0],
+        frequencies[0],
+        frequencies[1],
+        frequencies[2]
     );
 
     std::cerr<<"cuda end"  << std::endl;

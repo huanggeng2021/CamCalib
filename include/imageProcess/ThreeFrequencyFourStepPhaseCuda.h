@@ -50,6 +50,24 @@ public:
         const std::array<float, 3>& frequencies
     );
 
+       /** @brief 使用两级合成相位展开最高频率相位。
+     *  @param syntheticPhase123 三频合成相位。
+     *  @param syntheticPhase23 第二、第三频率合成相位。
+     *  @param highestWrappedPhase 最高频率包裹相位。
+     *  @param frequency1 最高频率。
+     *  @param frequency2 中间频率。
+     *  @param frequency3 最低频率。
+     *  @return 展开后的最高频率绝对相位。
+     */
+    static cv::Mat unwrapHighestFrequencyCuda(
+        const cv::Mat& syntheticPhase123,
+        const cv::Mat& syntheticPhase23,
+        const cv::Mat& highestWrappedPhase,
+        float frequency1,
+        float frequency2,
+        float frequency3
+    );
+
 };
 
 

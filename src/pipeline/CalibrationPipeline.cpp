@@ -77,11 +77,11 @@ CalibrationResult CalibrationPipeline::calibrateAndEvaluate(
     const BoardConfig& board,
     EvaluationReport& evaluation
 ) const {
-    //OpenCvCalibrator calibrator(board);
-    //CalibrationResult calibration = calibrator.calibrate(dataset, detection);
+    OpenCvCalibrator calibrator(board);
+    CalibrationResult calibration = calibrator.calibrate(dataset, detection);
 
-    CustomCalibrator cucalibrator(board);
-    CalibrationResult calibration = cucalibrator.calibrate(dataset, detection);
+    //CustomCalibrator cucalibrator(board);
+    //CalibrationResult calibration = cucalibrator.calibrate(dataset, detection);
     if(!calibration.converged){
         return calibration;
     }
